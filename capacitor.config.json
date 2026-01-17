@@ -1,0 +1,18 @@
+import { CapacitorConfig } from '@capacitor/cli';
+
+const config: CapacitorConfig = {
+  appId: 'com.ravi.gpscamera', // Yeh link ke saath match hona chahiye
+  appName: 'GPS Map Camera Pro',
+  webDir: 'www',
+  bundledWebRuntime: false,
+  plugins: {
+    Filesystem: {
+      androidStoragePermission: true
+    },
+    Share: {
+      androidStoragePermission: true
+    }
+  }
+};
+
+export default config;
