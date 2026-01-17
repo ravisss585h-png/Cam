@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GPS Map Camera - Clean Pro</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+<style>
+/* =========================================
+   1. THEME & UI TOKENS
+   ========================================= */
+:root{
+  --accent:#00e676;
+  --danger:#ff5252;
+  --bg:#000;
+  --card:rgba(0,0,0,.75);
+  --blue:#1e88e5;
+  --white:#ffffff;
+}
+
+/* =========================================
+   2. BASE LAYOUT
+   ========================================= */
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--white);
+  font-family:system-ui,-apple-system,Arial;
+  overflow:hidden;
+  user-select: none;
+}
+video,canvas{
+  position:fixed;
+  inset:0;
+  width:100%;
+  height:100%;
+  object-fit:cover
+}
+video.mirror{transform:scaleX(-1)}
+
+/* =========================================
+   3. DATA OVERLAY (GEOTAG STAMP)
+   ========================================= */
+#overlay{
+  position:fixed;
+  bottom:100px;
+  left:16px;
+  right:16px;
+  background:var(--card);
+  border-radius:15px;
+  padding:14px 18px;
+  font-size:14px;
+  line-height:1.5;
+  z-index: 5;
+  border: 1px solid rgba(255,255,255,0.15);
+  backdrop-filter: blur(5px);
+}
+.good{color:var(--accent)}
+.bad{color:var(--danger)}
+
+/* =========================================
+   4. CONTROL BUTTONS
+   ========================================= */
+#captureBtn{
+  position:fixed;
+  bottom:24px;
+  left:50%;
+  transform:translateX(-50%);
+  padding:18px 35px;
+  font-size:18px;
+  border-radius:50px;
+  border:none;
+  background:var(--accent);
+  color:#000;
+  font-weight:bold;
+  z-index: 10;
+  animation:pulse 1.8s infinite;
+  box-shadow: 0 5px 20px rgba(0,230,118,0.4);
+}
+#captureBtn:active{
+  transform:translateX(-50%) scale(.9);
+}
+
+#switchBtn,#settingsBtn,#flashBtn{
+  position:fixed;
+  right:16px;
+  width:55px;
+  height:55px;
+  border-radius:50%;
+  border:none;
+  background:var(--blue);
+  color:#fff;
+  font-size:22px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+#switchBtn{bottom:52%}
+#flashBtn{bottom:40%}
+#settingsBtn{bottom:28%}
+
+/* =========================================
+   5. INTERFACE ANIMATIONS
+   ========================================= */
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(0,230,118,0.7)}
+  70%{box-shadow:0 0 0 25px rgba(0,230,118,0)}
+  100%{box-shadow:0 0 0 0 rgba(0,230,118,0)}
+}
+
+/* =========================================
+   6. SLIDE-UP SETTINGS PANEL
+   ========================================= */
+#settings{
+  position:fixed;
+  left:0;right:0;bottom:-100%;
+  background:#121212;
+  border-radius:25px 25px 0 0;
+  padding:30px;
+  transition:.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  z-index:100;
+  border-top: 3px solid var(--accent);
+}
+#settings.show{bottom:0}
+.setting-row{
+  margin-bottom:22px; 
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center;
+}
+.toggle-switch{
+  appearance:none;
+  width:55px;height:28px;
+  background:#333;
+  border-radius:20px;
+  position:relative;
+  outline: none;
+  cursor: pointer;
+}
+.toggle-switch:checked{background:var(--accent)}
+.toggle-switch:before{
+  content:'';
+  position:absolute;
+  width:22px;height:22px;
+  background:#fff;
+  border-radius:50%;
+  top:3px;left:3px;
+  transition:.3s
+}
+.toggle-switch:checked:before{left:30px}
+
+/* =========================================
+   7. INITIAL PERMISSION OVERLAY
+   ========================================= */
+#perm-overlay{
+  position:fixed;
+  inset:0;
+  background:#000;
+  z-index:2000;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:center;
+  text-align:center;
+  padding:40px
+}
+#perm-overlay h1{color: var(--accent); font-size: 28px;}
+#perm-overlay button{
+  margin-top:30px;
+  padding:18px 45px;
+  border:none;
+  border-radius:35px;
+  background:var(--accent);
+  color:#000;
+  font-size:18px;
+  font-weight:900;
+}
+
+/* =========================================
+   8. FEEDBACK (TOASTS)
+   ========================================= */
+.status-toast {
+  position:fixed; 
+  bottom:100px; 
+  left:50%; 
+  transform:translateX(-50%);
+  background:rgba(0,0,0,0.9); 
+  color:var(--accent); 
+  padding:14px 28px;
+  border-radius:30px; 
+  font-size:15px; 
+  z-index: 1000;
+  border: 1px solid var(--accent);
+}
+</style>
+</head>
+
+<body>
+
+<div id="perm-overlay">
+  <h1>GPS Map Camera</h1>
+  <p>To geotag your captures, we require access to the camera and GPS sensors.</p>
+  <button onclick="grantAccess()">Initialize App</button>
+</div>
+
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas" style="display:none"></canvas>
+
+<div id="overlay">
+  <div id="loc-status">📍 Syncing GPS...</div>
+  <div id="gps-coords">🌐 Establishing Signal...</div>
+  <div id="geo-address">🏠 Mapping Location...</div>
+  <div id="sensor-data">🧭 -- | 🚗 -- | ⛰️ --</div>
+  <div id="acc-indicator" class="bad">Accuracy Status: --</div>
+  <div id="timestamp">⏰ --</div>
+</div>
+
+<button id="switchBtn">🔁</button>
+<button id="flashBtn">🔦</button>
+<button id="settingsBtn">⚙️</button>
+<button id="captureBtn">📸 Capture Photo</button>
+
+<div id="settings">
+  <h2 style="margin-top:0;">App Settings</h2>
+  <div class="setting-row">
+    <div>Accuracy Limit: <b id="acc-value"></b></div>
+    <input id="acc-range" type="range" min="10" max="100" step="5">
+  </div>
+  <div class="setting-row">
+    <span>Enable Data Stamp</span>
+    <input id="stamp-toggle" type="checkbox" class="toggle-switch">
+  </div>
+  <button onclick="toggleSettings()" style="width:100%; padding:15px; background:#222; color:#fff; border:none; border-radius:15px; font-weight:bold;">Return to Camera</button>
+</div>
+
+<script>
+/* =========================================
+   9. APPLICATION LOGIC - CORE STATE
+   ========================================= */
+let stream, track, facing="environment", watchId;
+let lat=0, lon=0, alt="N/A", speed="0", accuracy=999, heading="--", address="--";
+let torchOn=false;
+
+// Feedback sounds
+const shutterSound = new Audio("data:audio/mp3;base64,//uQxAAADhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFh");
+
+const config={
+  accLimit: localStorage.accLimit || 50,
+  useStamp: localStorage.useStamp !== "false"
+};
+
+const videoEl=document.getElementById("video");
+const canvasEl=document.getElementById("canvas");
+const canvasCtx=canvasEl.getContext("2d");
+
+/* =========================================
+   10. DYNAMIC UI BINDING
+   ========================================= */
+const accRangeInput=document.getElementById("acc-range");
+const accValueLabel=document.getElementById("acc-value");
+const stampToggleInput=document.getElementById("stamp-toggle");
+
+accRangeInput.value=config.accLimit;
+accValueLabel.innerText=config.accLimit+"m";
+stampToggleInput.checked=config.useStamp;
+
+accRangeInput.oninput=()=>{
+  config.accLimit=accRangeInput.value;
+  accValueLabel.innerText=config.accLimit+"m";
+  localStorage.accLimit=config.accLimit;
+};
+stampToggleInput.onchange=()=>{
+  config.useStamp=stampToggleInput.checked;
+  localStorage.useStamp=config.useStamp;
+};
+
+// Clock Synchronization
+setInterval(()=>{
+  document.getElementById("timestamp").innerText="⏰ "+new Date().toLocaleString();
+},1000);
+
+/* =========================================
+   11. CAMERA HARDWARE INTERFACE
+   ========================================= */
+async function startCamera(){
+  try {
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:facing, width: { ideal: 1920 }, height: { ideal: 1080 } }
+    });
+    videoEl.srcObject=stream;
+    track=stream.getVideoTracks()[0];
+    videoEl.classList.toggle("mirror",facing==="user");
+  } catch (err) {
+    showToast("Hardware Error: " + err.message);
+  }
+}
+
+document.getElementById("switchBtn").onclick=()=>{
+  facing=facing==="environment"?"user":"environment";
+  startCamera();
+};
+
+document.getElementById("flashBtn").onclick=async()=>{
+  if(!track) return;
+  try {
+    const caps=track.getCapabilities();
+    if(!caps.torch) return showToast("Flash not supported");
+    torchOn=!torchOn;
+    await track.applyConstraints({ advanced:[{ torch:torchOn }] });
+  } catch (e) { showToast("Flash Error"); }
+};
+
+/* =========================================
+   12. GPS & GEOCODING ENGINE
+   ========================================= */
+function startGPS(){
+  if(watchId) navigator.geolocation.clearWatch(watchId);
+
+  watchId=navigator.geolocation.watchPosition(async pos=>{
+    accuracy=pos.coords.accuracy;
+    lat=pos.coords.latitude;
+    lon=pos.coords.longitude;
+    alt=pos.coords.altitude? pos.coords.altitude.toFixed(1)+"m":"N/A";
+    speed=pos.coords.speed? (pos.coords.speed*3.6).toFixed(1)+"km/h":"0km/h";
+
+    document.getElementById("gps-coords").innerText=`🌐 ${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+    document.getElementById("sensor-data").innerText=`🧭 ${heading} | 🚗 ${speed} | ⛰️ ${alt}`;
+    
+    const accEl = document.getElementById("acc-indicator");
+    accEl.innerText="Accuracy Status: ±"+Math.round(accuracy)+"m";
+    accEl.className=accuracy<=config.accLimit?"good":"bad";
+
+    if(accuracy<=config.accLimit) updateReverseGeocode(lat,lon);
+  }, err => {
+    document.getElementById("loc-status").innerText="📍 GPS Signal Lost";
+  },{enableHighAccuracy:true});
+}
+
+async function updateReverseGeocode(lat,lon){
+  try{
+    const r=await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
+    const d=await r.json();
+    address=d.display_name||"--";
+    document.getElementById("geo-address").innerText="🏠 "+address;
+    document.getElementById("loc-status").innerText="📍 Geolocation Active";
+  }catch{
+    document.getElementById("geo-address").innerText="🏠 Address Fetch Failed";
+  }
+}
+
+/* =========================================
+   13. DEVICE SENSOR INTEGRATION
+   ========================================= */
+window.addEventListener("deviceorientationabsolute",e=>{
+  if(e.alpha!==null) heading=Math.round(e.alpha)+"°";
+});
+
+/* =========================================
+   14. PHOTO CAPTURE & SAVE LOGIC
+   ========================================= */
+async function capturePhoto(){
+  // Check for GPS quality before proceeding
+  if(accuracy > config.accLimit){
+    if(!confirm(`Warning: Weak GPS (±${Math.round(accuracy)}m). Continue?`)) return;
+  }
+
+  // Audio Feedback
+  shutterSound.play().catch(()=>{});
+
+  // Prepare high-res canvas
+  canvasEl.width=videoEl.videoWidth;
+  canvasEl.height=videoEl.videoHeight;
+  
+  // Mirroring logic for selfies
+  if(facing === "user"){
+    canvasCtx.translate(canvasEl.width, 0);
+    canvasCtx.scale(-1, 1);
+  }
+  canvasCtx.drawImage(videoEl,0,0,canvasEl.width,canvasEl.height);
+  canvasCtx.setTransform(1,0,0,1,0,0);
+
+  // Apply Metadata Geotag Stamp
+  if(config.useStamp){
+    canvasCtx.fillStyle="rgba(0,0,0,0.65)";
+    canvasCtx.fillRect(0, canvasEl.height - 240, canvasEl.width, 240);
+    canvasCtx.fillStyle="#fff";
+    canvasCtx.font="bold 30px sans-serif";
+    let yPos = canvasEl.height - 180;
+    canvasCtx.fillText(`COORDS: ${lat.toFixed(6)}, ${lon.toFixed(6)}`, 50, yPos);
+    canvasCtx.fillText(`LOCATION: ${address.substring(0, 55)}...`, 50, yPos+50);
+    canvasCtx.fillText(`HEADING: ${heading} | SPEED: ${speed} | ALT: ${alt}`, 50, yPos+100);
+    canvasCtx.fillText(`TIMESTAMP: ${new Date().toLocaleString()}`, 50, yPos+150);
+  }
+
+  const base64Img = canvasEl.toDataURL("image/jpeg", 0.95).split(",")[1];
+
+  // Save Confirmation Popup
+  const userConfirmed = confirm("Photo captured! Do you want to save this geotagged image to your gallery?");
+  
+  if(userConfirmed) {
+    saveToGallery(base64Img);
+  } else {
+    showToast("Capture Discarded");
+  }
+}
+
+async function saveToGallery(imgData) {
+  // EXECUTE SAVE TO GALLERY
+  if(window.Capacitor && Capacitor.Plugins.Filesystem){
+    try {
+      const { Filesystem } = Capacitor.Plugins;
+      const fName = `GPS_IMG_${Date.now()}.jpg`;
+      
+      await Filesystem.writeFile({
+        path: `Pictures/GPS_Map_Camera/${fName}`,
+        data: imgData,
+        directory: 'EXTERNAL', // Ensures Gallery Visibility
+        recursive: true
+      });
+      showToast("📸 Saved to Gallery (Pictures)");
+    } catch (e) {
+      showToast("Storage Failure: " + e.message);
+    }
+  } else {
+    // Browser fallback
+    const downloadLink=document.createElement("a");
+    downloadLink.href="data:image/jpeg;base64,"+imgData;
+    downloadLink.download=`GPS_FIELD_${Date.now()}.jpg`;
+    downloadLink.click();
+    showToast("📸 Downloaded Successfully");
+  }
+}
+
+document.getElementById("captureBtn").onclick=capturePhoto;
+
+/* =========================================
+   15. SYSTEM UTILS & EVENTS
+   ========================================= */
+function showToast(txt){
+  const toastEl=document.createElement("div");
+  toastEl.className="status-toast";
+  toastEl.innerText=txt;
+  document.body.appendChild(toastEl);
+  setTimeout(()=>toastEl.remove(),3500);
+}
+
+function toggleSettings(){
+  document.getElementById("settings").classList.toggle("show");
+}
+document.getElementById("settingsBtn").onclick=toggleSettings;
+
+// Hardware Volume Capture
+document.addEventListener("keydown",e=>{
+  if(e.key==="VolumeUp"||e.key==="VolumeDown"){
+    e.preventDefault();
+    capturePhoto();
+  }
+});
+
+// App Focus Management
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden){
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    if(watchId) navigator.geolocation.clearWatch(watchId);
+  }else if(localStorage.isAuthorized){
+    startCamera();
+    startGPS();
+  }
+});
+
+function grantAccess(){
+  localStorage.isAuthorized=true;
+  document.getElementById("perm-overlay").style.display="none";
+  startCamera();
+  startGPS();
+}
+
+if(localStorage.isAuthorized) grantAccess();
+</script>
+
+</body>
+</html>
