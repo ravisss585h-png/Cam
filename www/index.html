@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <title>GPS Map Camera - Ultra Pro Max (Official Final Build)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+    <style>
+        :root {
+            --primary-color: #00e676; /* WhatsApp & Success Green */
+            --secondary-color: #1e88e5; /* Professional Field Blue */
+            --danger-color: #ff5252; /* Error/Alert Red */
+            --dark-bg: #000000;
+            --overlay-bg: rgba(0, 0, 0, 0.82);
+            --text-color: #ffffff;
+            --glass-border: rgba(255, 255, 255, 0.18);
+            --font-main: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            outline: none;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background: var(--dark-bg);
+            color: var(--text-color);
+            font-family: var(--font-main);
+            overflow: hidden;
+            user-select: none;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* -----------------------------------------------------------------
+           VIDEO & CANVAS LAYERS
+           ----------------------------------------------------------------- */
+        #video-preview, #capture-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 1;
+        }
+
+        .mirrored {
+            transform: scaleX(-1);
+        }
+
+        /* -----------------------------------------------------------------
+           MAIN HUD OVERLAY (DATA BOX)
+           ----------------------------------------------------------------- */
+        #data-overlay {
+            position: fixed;
+            bottom: 125px;
+            left: 18px;
+            right: 18px;
+            background: var(--overlay-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 26px;
+            padding: 22px;
+            z-index: 10;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            box-shadow: 0 15px 55px rgba(0, 0, 0, 0.85);
+            transition: transform 0.3s ease;
+        }
+
+        .data-row {
+            margin-bottom: 12px;
+            font-size: 14px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        .data-label {
+            font-weight: bold;
+            width: 32px;
+            text-align: center;
+            font-size: 18px;
+            opacity: 0.9;
+        }
+
+        .data-value {
+            color: #f2f2f2;
+            flex: 1;
+            line-height: 1.6;
+            letter-spacing: 0.3px;
+        }
+
+        .status-good {
+            color: var(--primary-color);
+            font-weight: 900;
+            text-shadow: 0 0 10px rgba(0, 230, 118, 0.3);
+        }
+
+        .status-bad {
+            color: var(--danger-color);
+            font-weight: 900;
+            text-shadow: 0 0 10px rgba(255, 82, 82, 0.3);
+        }
+
+        /* -----------------------------------------------------------------
+           FLOATING ACTION BUTTONS
+           ----------------------------------------------------------------- */
+        .btn-circle {
+            position: fixed;
+            width: 68px;
+            height: 68px;
+            border-radius: 50%;
+            border: none;
+            background: var(--secondary-color);
+            color: white;
+            font-size: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 20;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .btn-circle:active {
+            transform: scale(0.82);
+            filter: brightness(1.2);
+        }
+
+        #capture-btn {
+            position: fixed;
+            bottom: 35px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            border: 10px solid rgba(255, 255, 255, 0.45);
+            z-index: 25;
+            animation: pulse-border 2.2s infinite;
+        }
+
+        @keyframes pulse-border {
+            0% { box-shadow: 0 0 0 0 rgba(0, 230, 118, 0.7); }
+            70% { box-shadow: 0 0 0 35px rgba(0, 230, 118, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(0, 230, 118, 0); }
+        }
+
+        #switch-camera { bottom: 490px; right: 22px; }
+        #toggle-flash { bottom: 395px; right: 22px; }
+        #open-settings { bottom: 300px; right: 22px; }
+
+        /* -----------------------------------------------------------------
+           SETTINGS DRAWER (SLIDE-UP)
+           ----------------------------------------------------------------- */
+        #settings-panel {
+            position: fixed;
+            bottom: -100%;
+            left: 0;
+            width: 100%;
+            background: #161616;
+            border-radius: 38px 38px 0 0;
+            padding: 40px 30px;
+            z-index: 100;
+            transition: bottom 0.5s cubic-bezier(0.2, 1, 0.3, 1);
+            border-top: 5px solid var(--primary-color);
+            box-shadow: 0 -20px 60px rgba(0,0,0,0.8);
+        }
+
+        #settings-panel.active {
+            bottom: 0;
+        }
+
+        .setting-header {
+            margin-top: 0;
+            color: var(--primary-color);
+            font-size: 24px;
+            margin-bottom: 30px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .setting-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 28px;
+        }
+
+        .toggle-label { font-size: 16px; font-weight: 500; }
+
+        input[type=range] {
+            width: 140px;
+            accent-color: var(--primary-color);
+        }
+
+        /* -----------------------------------------------------------------
+           ANIMATED MODAL (SAVE CONFIRMATION)
+           ----------------------------------------------------------------- */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
+            z-index: 3000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.4s ease-out;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .modal-box {
+            background: #1c1c1c;
+            border: 1px solid var(--glass-border);
+            padding: 45px 35px;
+            border-radius: 45px;
+            text-align: center;
+            width: 92%;
+            max-width: 400px;
+            box-shadow: 0 45px 90px rgba(0,0,0,0.95);
+            transform: scale(0.65) translateY(70px);
+            opacity: 0;
+            transition: all 0.55s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .modal-overlay.active .modal-box {
+            transform: scale(1) translateY(0);
+            opacity: 1;
+        }
+
+        .modal-title {
+            color: var(--primary-color);
+            font-size: 26px;
+            margin: 15px 0 10px 0;
+        }
+
+        .modal-body {
+            color: #b0b0b0;
+            line-height: 1.6;
+            margin-bottom: 35px;
+            font-size: 16px;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 20px;
+        }
+
+        .modal-btn {
+            flex: 1;
+            padding: 20px;
+            border: none;
+            border-radius: 22px;
+            font-weight: 900;
+            font-size: 17px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .modal-btn:active { transform: scale(0.94); }
+
+        .btn-save { background: var(--primary-color); color: #000; box-shadow: 0 8px 25px rgba(0, 230, 118, 0.25); }
+        .btn-discard { background: #333; color: #fff; }
+
+        /* -----------------------------------------------------------------
+           DYNAMIC ACTION BAR (OPEN & SHARE)
+           ----------------------------------------------------------------- */
+        #action-bar {
+            position: fixed;
+            bottom: -150px;
+            left: 20px;
+            right: 20px;
+            background: #141414;
+            border-radius: 30px;
+            padding: 20px;
+            z-index: 4000;
+            display: flex;
+            gap: 18px;
+            transition: bottom 0.75s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+            border: 1.5px solid var(--primary-color);
+            box-shadow: 0 25px 60px rgba(0, 230, 118, 0.35);
+        }
+
+        #action-bar.show {
+            bottom: 35px;
+        }
+
+        .action-btn {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 18px;
+            border: none;
+            border-radius: 22px;
+            font-weight: bold;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        .btn-open { background: #2a2a2a; color: white; }
+        .btn-whatsapp { background: #25D366; color: white; }
+
+        /* -----------------------------------------------------------------
+           ONBOARDING / PERMISSION SCREEN
+           ----------------------------------------------------------------- */
+        #perm-screen {
+            position: fixed;
+            inset: 0;
+            background: #000;
+            z-index: 5000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 45px;
+        }
+
+        .hero-title {
+            color: var(--primary-color);
+            font-size: 40px;
+            margin: 0 0 20px 0;
+            text-shadow: 0 0 20px rgba(0, 230, 118, 0.4);
+        }
+
+        .hero-desc {
+            color: #777;
+            font-size: 18px;
+            margin-bottom: 50px;
+            max-width: 300px;
+            line-height: 1.6;
+        }
+
+        .start-btn {
+            padding: 22px 75px;
+            border-radius: 55px;
+            border: none;
+            background: var(--primary-color);
+            font-weight: 900;
+            font-size: 22px;
+            color: #000;
+            box-shadow: 0 15px 40px rgba(0, 230, 118, 0.4);
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+
+    <video id="video-preview" autoplay playsinline></video>
+    <canvas id="capture-canvas" style="display:none"></canvas>
+
+    <div id="data-overlay">
+        <div class="data-row">
+            <span class="data-label">📍</span>
+            <span id="txt-status" class="data-value">Initializing Sensors...</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">🌐</span>
+            <span id="txt-coords" class="data-value">0.000000, 0.000000</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">🏠</span>
+            <span id="txt-address" class="data-value">Searching Location...</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">🧭</span>
+            <span id="txt-sensors" class="data-value">0° | 0 km/h | 0.0m</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">📏</span>
+            <span id="txt-accuracy" class="data-value status-bad">Accuracy Calibration...</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">⏰</span>
+            <span id="txt-time" class="data-value">--/--/----, --:--:-- am/pm</span>
+        </div>
+    </div>
+
+    <button id="switch-camera" class="btn-circle" title="Switch Lens">🔁</button>
+    <button id="toggle-flash" class="btn-circle" title="Toggle Light">🔦</button>
+    <button id="open-settings" class="btn-circle" title="Settings">⚙️</button>
+    <button id="capture-btn" title="Capture Geotagged Image"></button>
+
+    <div id="save-modal-overlay" class="modal-overlay">
+        <div class="modal-box">
+            <div style="font-size: 75px; margin-bottom: 25px;">📸</div>
+            <h2 class="modal-title">Photo Captured!</h2>
+            <p class="modal-body">Aapka professional geotagged report taiyaar hai. Kya ise phone ki Gallery mein save karein?</p>
+            <div class="modal-footer">
+                <button id="btn-discard" class="modal-btn btn-discard">Hata Do</button>
+                <button id="btn-save" class="modal-btn btn-save">Save & Share</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="action-bar">
+        <button id="btn-open-photo" class="action-btn btn-open">📂 Photo Dekho</button>
+        <button id="btn-share-whatsapp" class="action-btn btn-whatsapp">💬 WhatsApp</button>
+    </div>
+
+    <div id="settings-panel">
+        <h2 class="setting-header">Pro Configurations</h2>
+        
+        <div class="setting-item">
+            <span class="toggle-label">Accuracy Threshold: <b id="lbl-acc-limit">50m</b></span>
+            <input id="rng-accuracy" type="range" min="10" max="250" step="5">
+        </div>
+
+        <div class="setting-item">
+            <span class="toggle-label">Enable Watermark Stamp</span>
+            <input id="chk-stamp" type="checkbox" style="width:25px; height:25px;" checked>
+        </div>
+
+        <div class="setting-item">
+            <span class="toggle-label">High-Res Mode (1080p)</span>
+            <input id="chk-hd" type="checkbox" style="width:25px; height:25px;" checked>
+        </div>
+
+        <button id="close-settings" style="width:100%; padding:18px; background:#333; color:white; border:none; border-radius:20px; font-weight:bold; margin-top:20px;">Theek Hai</button>
+    </div>
+
+    <div id="perm-screen">
+        <h1 class="hero-title">GPS Map Camera</h1>
+        <p class="hero-desc">Bhai, professional field surveys ke liye app ko Camera aur Location access ki zarurat hogi.</p>
+        <button class="start-btn" onclick="initializeSystem()">Shuru Karein</button>
+    </div>
+
+    <script>
+        /**
+         * GLOBAL APPLICATION STATE
+         */
+        let stream, track, facing = "environment", watchId;
+        let lat = 0, lon = 0, alt = "0m", speed = "0 km/h", accuracy = 999, heading = "0°", address = "Address Searching...";
+        let lastSavedUri = ""; 
+
+        // APPLICATION CONFIGURATION
+        const appConfig = {
+            // Updated Play Store ID
+            applicationId: "com.ravi.gpscamera", 
+            get playStoreUrl() { return `https://play.google.com/store/apps/details?id=${this.applicationId}`; }
+        };
+
+        const shutterAudio = new Audio("data:audio/mp3;base64,//uQxAAADhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFh");
+
+        // DOM ELEMENTS CACHE
+        const video = document.getElementById("video-preview");
+        const canvas = document.getElementById("capture-canvas");
+        const ctx = canvas.getContext("2d");
+        const actionBar = document.getElementById("action-bar");
+        const saveModal = document.getElementById("save-modal-overlay");
+        const accSlider = document.getElementById("rng-accuracy");
+        const accLabel = document.getElementById("lbl-acc-limit");
+
+        /**
+         * CORE INITIALIZATION SEQUENCE
+         * Requests native permissions and boots sensors.
+         */
+        async function initializeSystem() {
+            if (window.Capacitor) {
+                try {
+                    // Requests mandatory storage permissions for Android
+                    const { Filesystem } = Capacitor.Plugins;
+                    await Filesystem.requestPermissions();
+                } catch (e) { console.warn("Permission logic error", e); }
+            }
+
+            // Triggers Location Activation via browser API
+            navigator.geolocation.getCurrentPosition(() => {}, () => {});
+
+            localStorage.setItem('isReady', 'true');
+            document.getElementById("perm-screen").style.display = "none";
+            
+            startCamera();
+            startGPS();
+        }
+
+        /**
+         * CAMERA MANAGEMENT ENGINE
+         * Handles Lens switching and Stream resolution.
+         */
+        async function startCamera() {
+            try {
+                if (stream) stream.getTracks().forEach(t => t.stop());
+                
+                const isHD = document.getElementById("chk-hd").checked;
+                const constraints = {
+                    video: { 
+                        facingMode: facing, 
+                        width: { ideal: isHD ? 1920 : 1280 }, 
+                        height: { ideal: isHD ? 1080 : 720 } 
+                    }
+                };
+
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                track = stream.getVideoTracks()[0];
+                
+                // Visual mirroring for front camera selfies
+                video.classList.toggle("mirrored", facing === "user");
+            } catch (e) { 
+                alert("Camera fail ho gaya: " + e.message); 
+            }
+        }
+
+        document.getElementById("switch-camera").onclick = () => {
+            facing = (facing === "environment") ? "user" : "environment";
+            startCamera();
+        };
+
+        document.getElementById("toggle-flash").onclick = async () => {
+            if (!track) return;
+            try {
+                const caps = track.getCapabilities();
+                if (!caps.torch) return alert("Bhai, is lens mein flash supported nahi hai.");
+                
+                const currentTorch = track.getSettings().torch || false;
+                await track.applyConstraints({ advanced: [{ torch: !currentTorch }] });
+            } catch (e) { console.error("Flash error", e); }
+        };
+
+        /**
+         * GEOTAGGING ENGINE (GPS & GEOCODING)
+         * Continuously tracks location and fetches addresses.
+         */
+        function startGPS() {
+            if (watchId) navigator.geolocation.clearWatch(watchId);
+            
+            watchId = navigator.geolocation.watchPosition(async (pos) => {
+                accuracy = pos.coords.accuracy;
+                lat = pos.coords.latitude; 
+                lon = pos.coords.longitude;
+                alt = pos.coords.altitude ? pos.coords.altitude.toFixed(1) + "m" : "0.0m";
+                speed = pos.coords.speed ? (pos.coords.speed * 3.6).toFixed(1) + " km/h" : "0 km/h";
+
+                // Update Visual HUD
+                document.getElementById("txt-coords").innerText = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+                document.getElementById("txt-sensors").innerText = `${heading} | ${speed} | ${alt}`;
+                
+                const accEl = document.getElementById("txt-accuracy");
+                accEl.innerText = `Accuracy: ±${Math.round(accuracy)}m`;
+                
+                // Red/Green logic based on user limit
+                const limit = parseInt(accSlider.value);
+                if (accuracy <= limit) {
+                    accEl.className = "data-value status-good";
+                    reverseGeocode(lat, lon);
+                } else {
+                    accEl.className = "data-value status-bad";
+                }
+            }, (err) => {
+                document.getElementById("txt-status").innerText = "📍 GPS Signal Lost!";
+            }, { 
+                enableHighAccuracy: true,
+                maximumAge: 0,
+                timeout: 10000 
+            });
+        }
+
+        async function reverseGeocode(lt, ln) {
+            try {
+                // Using OpenStreetMap Nominatim for Reverse Geocoding
+                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lt}&lon=${ln}`);
+                const data = await res.json();
+                address = data.display_name || "Location Verified";
+                
+                // Formatting address for UI
+                document.getElementById("txt-address").innerText = address.length > 70 ? address.substring(0, 67) + "..." : address;
+                document.getElementById("txt-status").innerText = "📍 Geolocation Locked";
+            } catch (e) {
+                document.getElementById("txt-address").innerText = "Network Busy: Address Loading...";
+            }
+        }
+
+        /**
+         * DEVICE ORIENTATION (COMPASS)
+         * Tracks bearing for the geotag stamp.
+         */
+        window.addEventListener("deviceorientationabsolute", (e) => {
+            if (e.alpha !== null) {
+                heading = Math.round(e.alpha) + "°";
+            }
+        });
+
+        /**
+         * CAPTURE WORKFLOW & WATERMARKING
+         * Combines live feed with GPS metadata onto a canvas.
+         */
+        document.getElementById("capture-btn").onclick = () => {
+            // Shutter feedback
+            shutterAudio.play().catch(()=>{});
+            
+            // Set High-Quality Canvas Resolution
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            
+            // Mirror image if using front camera
+            if (facing === "user") { 
+                ctx.translate(canvas.width, 0); 
+                ctx.scale(-1, 1); 
+            }
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            ctx.setTransform(1, 0, 0, 1, 0, 0); // Restore transform
+
+            // Apply Geotag Watermark (Stamp)
+            if (document.getElementById("chk-stamp").checked) {
+                const rectHeight = Math.round(canvas.height * 0.2); // 20% height for stamp
+                ctx.fillStyle = "rgba(0,0,0,0.72)";
+                ctx.fillRect(0, canvas.height - rectHeight, canvas.width, rectHeight);
+                
+                ctx.fillStyle = "#ffffff";
+                const fontSize = Math.round(canvas.width * 0.035); // Responsive font size
+                ctx.font = `bold ${fontSize}px sans-serif`;
+                
+                let startY = canvas.height - (rectHeight * 0.7);
+                const paddingLeft = Math.round(canvas.width * 0.05);
+
+                ctx.fillText(`COORDS: ${lat.toFixed(6)}, ${lon.toFixed(6)}`, paddingLeft, startY);
+                ctx.fillText(`LOC: ${address.substring(0, 55)}...`, paddingLeft, startY + (fontSize * 1.5));
+                ctx.fillText(`SENSORS: ${heading} | ${speed} | ${alt}`, paddingLeft, startY + (fontSize * 3));
+                ctx.fillText(`TIME: ${new Date().toLocaleString('hi-IN')}`, paddingLeft, startY + (fontSize * 4.5));
+            }
+
+            // Show UI confirmation
+            saveModal.classList.add("active");
+            actionBar.classList.remove("show"); // Reset share bar
+        };
+
+        document.getElementById("btn-discard").onclick = () => {
+            saveModal.classList.remove("active");
+        };
+
+        /**
+         * FILE SYSTEM OPERATIONS (GALLERY STRATEGY)
+         * Saves Base64 data to Android DCIM folder for immediate visibility.
+         */
+        document.getElementById("btn-save").onclick = async () => {
+            saveModal.classList.remove("active");
+            
+            // Encode canvas to high-quality JPEG
+            const base64Data = canvas.toDataURL("image/jpeg", 0.95).split(",")[1];
+
+            if (window.Capacitor && Capacitor.Plugins.Filesystem) {
+                try {
+                    const { Filesystem } = Capacitor.Plugins;
+                    const fileName = `GPS_REC_${Date.now()}.jpg`;
+                    
+                    // Saving to DCIM ensures the photo appears in the Gallery app immediately.
+                    const result = await Filesystem.writeFile({
+                        path: `DCIM/GPS_Map_Camera/${fileName}`,
+                        data: base64Data,
+                        directory: 'EXTERNAL_STORAGE', 
+                        recursive: true
+                    });
+                    
+                    lastSavedUri = result.uri; 
+                    
+                    // Animate Success Bar
+                    actionBar.classList.add("show"); 
+                    
+                    // Auto-hide bar after 20 seconds to keep UI clean
+                    setTimeout(() => actionBar.classList.remove("show"), 20000);
+                } catch (e) { 
+                    alert("Storage Error: " + e.message); 
+                }
+            } else {
+                // Desktop Browser Fallback
+                const link = document.createElement("a");
+                link.href = "data:image/jpeg;base64," + base64Data;
+                link.download = `GPS_Map_Field_Capture.jpg`;
+                link.click();
+            }
+        };
+
+        /**
+         * NATIVE SHARING LOGIC
+         * Shares the file + Play Store link directly to WhatsApp.
+         */
+        document.getElementById("btn-share-whatsapp").onclick = async () => {
+            if (!window.Capacitor || !lastSavedUri) return;
+            
+            const { Share } = Capacitor.Plugins;
+            try {
+                await Share.share({
+                    title: 'Professional Geotag Report',
+                    text: `Field report verified at: ${address}\nCoords: ${lat}, ${lon}\n\nCaptured with GPS Map Camera:\n${appConfig.playStoreUrl}`,
+                    url: lastSavedUri,
+                    dialogTitle: 'WhatsApp par Share Karein',
+                });
+            } catch (e) { console.log("Sharing cancelled."); }
+        };
+
+        /**
+         * FILE OPENER LOGIC
+         * Opens the saved image in the phone's default gallery viewer.
+         */
+        document.getElementById("btn-open-photo").onclick = async () => {
+            if (window.Capacitor && Capacitor.Plugins.FileOpener) {
+                try {
+                    await Capacitor.Plugins.FileOpener.open({
+                        filePath: lastSavedUri,
+                        contentType: 'image/jpeg'
+                    });
+                } catch (e) { 
+                    alert("Gallery viewer load nahi ho raha. Kripya Gallery mein check karein."); 
+                }
+            } else {
+                alert("Gallery folder: DCIM/GPS_Map_Camera");
+            }
+        };
+
+        /**
+         * UI UTILITIES & LIFECYCLE MANAGEMENT
+         */
+        document.getElementById("open-settings").onclick = () => {
+            document.getElementById("settings-panel").classList.add("active");
+        };
+
+        document.getElementById("close-settings").onclick = () => {
+            document.getElementById("settings-panel").classList.remove("active");
+        };
+
+        accSlider.oninput = () => {
+            accLabel.innerText = accSlider.value + "m";
+            startGPS(); // Restart GPS to apply new visual threshold
+        };
+
+        // Hardware Volume Key Binding for ease of use in field.
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "VolumeUp" || e.key === "VolumeDown") {
+                e.preventDefault();
+                document.getElementById("capture-btn").click();
+            }
+        });
+
+        // Background / Foreground Resource Management
+        document.addEventListener("visibilitychange", () => {
+            if (document.hidden) {
+                if (stream) stream.getTracks().forEach(t => t.stop());
+                if (watchId) navigator.geolocation.clearWatch(watchId);
+            } else if (localStorage.getItem('isReady')) {
+                startCamera();
+                startGPS();
+            }
+        });
+
+        // Real-time Clock Sync
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById("txt-time").innerText = now.toLocaleString('hi-IN');
+        }, 1000);
+
+        // Auto-boot if previously allowed
+        if (localStorage.getItem('isReady')) initializeSystem();
+    </script>
+
+</body>
+</html>
