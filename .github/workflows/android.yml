@@ -1,0 +1,90 @@
+name: Build Android APK (GPS Map Camera)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Repo checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Node.js setup
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # 3. Install npm dependencies
+      - name: Install dependencies
+        run: npm install
+
+      # 4. Java setup (Required for Android/Gradle)
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 5. Android SDK setup
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 6. Create Android platform if not exists
+      - name: Add Android platform
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+
+      # 7. Sync Capacitor (Copy assets and plugins)
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # 8. Patch ALL Required Permissions in AndroidManifest
+      - name: Patch AndroidManifest permissions
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+
+          # Camera Permission
+          grep -q 'android.permission.CAMERA' $MANIFEST || \
+          sed -i '/<manifest/a\    <uses-permission android:name="android.permission.CAMERA" />' $MANIFEST
+
+          # Location Permissions
+          grep -q 'android.permission.ACCESS_FINE_LOCATION' $MANIFEST || \
+          sed -i '/<manifest/a\    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />' $MANIFEST
+
+          grep -q 'android.permission.ACCESS_COARSE_LOCATION' $MANIFEST || \
+          sed -i '/<manifest/a\    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />' $MANIFEST
+
+          # Storage & Media Permissions (For Photo Saving)
+          grep -q 'android.permission.WRITE_EXTERNAL_STORAGE' $MANIFEST || \
+          sed -i '/<manifest/a\    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />' $MANIFEST
+
+          grep -q 'android.permission.READ_EXTERNAL_STORAGE' $MANIFEST || \
+          sed -i '/<manifest/a\    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />' $MANIFEST
+
+          grep -q 'android.permission.READ_MEDIA_IMAGES' $MANIFEST || \
+          sed -i '/<manifest/a\    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />' $MANIFEST
+          # AdMob Application ID (Required for Test Ads)
+          grep -q 'com.google.android.gms.ads.APPLICATION_ID' $MANIFEST || \
+          sed -i '/<application/a\    <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-3940256099942544~3347511713" />' $MANIFEST
+
+      # 9. Build Debug APK
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # 10. Upload APK artifact
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPS-Map-Camera-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
