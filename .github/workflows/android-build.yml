@@ -1,0 +1,106 @@
+name: Android Build (Final Requirements Met)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      # 2. Setup Java
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # 3. Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 4. Install Dependencies
+      - name: Install Dependencies
+        run: npm install
+
+      # 5. Build Web App
+      - name: Build Web App
+        run: npm run build
+
+      # === REQUIREMENT 1: XML PICK + GRADLE AUTO BUILD + FIX ERROR ===
+      - name: Smart Repair (Backup XML -> Fresh Gradle -> Restore -> Clean)
+        run: |
+          echo "🔍 Checking for existing XML..."
+          
+          # A. Agar XML hai, toh backup lo
+          if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
+            echo "✅ XML Found! Backing up..."
+            cp android/app/src/main/AndroidManifest.xml manifest_backup.xml
+            HAS_MANIFEST="true"
+          else
+            echo "⚠️ No XML found, creating fresh."
+            HAS_MANIFEST="false"
+          fi
+
+          # B. Toota hua android folder delete karo
+          rm -rf android
+
+          # C. Fresh Android project banao (Gradle files ke saath)
+          npx cap add android
+
+          # D. XML Restore karo aur ERROR FIX karo
+          if [ "$HAS_MANIFEST" = "true" ]; then
+            echo "♻️ Restoring your custom XML..."
+            cp manifest_backup.xml android/app/src/main/AndroidManifest.xml
+            
+            # --- CRITICAL FIX ---
+            # Ye line 'package="com.cam.app"' ko XML se hata degi taaki naya Gradle fail na ho
+            echo "🔧 Removing conflicting package attribute..."
+            sed -i 's/package="[^"]*"//' android/app/src/main/AndroidManifest.xml
+          fi
+
+          # E. Sync Capacitor
+          npx cap sync android
+
+      # === REQUIREMENT 2: ASSETS ICON PICK ===
+      - name: Generate App Icons
+        run: |
+          npm install @capacitor/assets --save-dev
+          npx capacitor-assets generate --android
+
+      # === REQUIREMENT 3: ADMOB RUN (SAFETY CHECK) ===
+      - name: Ensure AdMob App ID exists
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          TEST_APP_ID="ca-app-pub-3940256099942544~3347511713"
+          
+          if grep -q "com.google.android.gms.ads.APPLICATION_ID" "$MANIFEST"; then
+            echo "✅ AdMob App ID present."
+          else
+            echo "⚠️ App ID missing! Injecting Test ID to prevent crash..."
+            sed -i "s|</application>|<meta-data android:name=\"com.google.android.gms.ads.APPLICATION_ID\" android:value=\"$TEST_APP_ID\"/>\n    </application>|" $MANIFEST
+          fi
+
+      # 8. Build APK (Ab Gradle Wrapper use hoga)
+      - name: Build Debug APK
+        working-directory: ./android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # 9. Upload APK
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
