@@ -1,0 +1,101 @@
+name: build-android
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # 3️⃣ Install npm deps
+      - name: Install dependencies
+        run: npm install
+
+      # 4️⃣ Java
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 5️⃣ Android SDK
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 6️⃣ Add Android platform
+      - name: Add Android platform
+        run: npx cap add android || true
+
+      # 7️⃣ 🔴 INJECT APP ICON (SAFE & FINAL)
+      - name: Inject App Icon
+        run: |
+          ICON="assets/icon.png"
+          RES="android/app/src/main/res"
+
+          if [ ! -f "$ICON" ]; then
+            echo "❌ assets/icon.png NOT FOUND"
+            exit 1
+          fi
+
+          for D in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+            mkdir -p "$RES/$D"
+            cp "$ICON" "$RES/$D/ic_launcher.png"
+            cp "$ICON" "$RES/$D/ic_launcher_round.png"
+          done
+
+          mkdir -p "$RES/mipmap-anydpi-v26"
+
+          cat > "$RES/mipmap-anydpi-v26/ic_launcher.xml" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@android:color/white"/>
+    <foreground android:drawable="@mipmap/ic_launcher"/>
+</adaptive-icon>
+EOF
+
+          cat > "$RES/mipmap-anydpi-v26/ic_launcher_round.xml" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@android:color/white"/>
+    <foreground android:drawable="@mipmap/ic_launcher_round"/>
+</adaptive-icon>
+EOF
+
+          echo "✅ App icon injected successfully"
+
+      # 8️⃣ Prepare Capacitor Web Assets
+      - name: Prepare Web Assets
+        run: |
+          mkdir -p www
+          cp index.html www/index.html
+
+      # 9️⃣ Capacitor Sync
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # 🔟 Build Debug APK
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # 1️⃣1️⃣ Upload APK
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
