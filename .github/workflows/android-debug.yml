@@ -1,0 +1,64 @@
+name: Android Debug Build
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ CHECKOUT
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ NODE
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      # 3️⃣ JAVA
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 4️⃣ ANDROID PLATFORM
+      - name: Add Android Platform
+        run: npx cap add android || true
+
+      # 5️⃣ ICON
+      - name: Inject App Icon
+        shell: bash
+        run: |
+          ICON=assets/icon.png
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p android/app/src/main/res/mipmap-$d
+            cp $ICON android/app/src/main/res/mipmap-$d/ic_launcher.png
+          done
+
+      # 6️⃣ CAPACITOR SYNC
+      - name: Capacitor Sync
+        run: npx cap sync android
+
+      # 7️⃣ BUILD DEBUG APK
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # 8️⃣ UPLOAD APK
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
