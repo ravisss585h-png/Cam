@@ -1,0 +1,104 @@
+name: Android Debug Build
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # -----------------------------
+      # 0️⃣ CHECKOUT
+      # -----------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------
+      # 1️⃣ NODE SETUP
+      # -----------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install NPM dependencies
+        run: npm install
+
+      # -----------------------------
+      # 2️⃣ JAVA SETUP (GRADLE REQUIRED)
+      # -----------------------------
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # -----------------------------
+      # 3️⃣ ANDROID PLATFORM CREATE
+      # -----------------------------
+      - name: Add Android Platform
+        run: |
+          npx cap add android || true
+
+      # -----------------------------
+      # 4️⃣ APP ICON INJECT
+      # -----------------------------
+      - name: Inject App Icon
+        run: |
+          ICON=assets/icon.png
+
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p android/app/src/main/res/mipmap-$d
+            cp $ICON android/app/src/main/res/mipmap-$d/ic_launcher.png
+          done
+
+      # -----------------------------
+      # 5️⃣ GPS CAMERA PERMISSIONS
+      # -----------------------------
+      - name: Inject GPS & Camera Permissions
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+
+          sed -i '/<manifest/a \
+          <uses-permission android:name="android.permission.INTERNET"/>\
+          <uses-permission android:name="android.permission.CAMERA"/>\
+          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>\
+          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>\
+          <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>' $MANIFEST
+
+      # -----------------------------
+      # 6️⃣ ADMOB TEST APP ID
+      # -----------------------------
+      - name: Inject AdMob TEST App ID
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+
+          sed -i '/<application/a \
+          <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-3940256099942544~3347511713"/>' $MANIFEST
+
+      # -----------------------------
+      # 7️⃣ CAPACITOR SYNC
+      # -----------------------------
+      - name: Capacitor Sync
+        run: npx cap sync android
+
+      # -----------------------------
+      # 8️⃣ DEBUG APK BUILD
+      # -----------------------------
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # -----------------------------
+      # 9️⃣ UPLOAD APK
+      # -----------------------------
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
