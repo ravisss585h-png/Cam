@@ -1,0 +1,87 @@
+name: Build Android APK (GPS Map Camera)
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # 3️⃣ Install npm deps
+      - name: Install dependencies
+        run: npm install
+
+      # 4️⃣ Java
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 5️⃣ Android SDK
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 6️⃣ Add Android platform (if missing)
+      - name: Add Android platform
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+
+      # 7️⃣ 🔥 Inject App Icon (SAFE – NO EOF)
+      - name: Inject App Icon
+        run: |
+          ICON=assets/icon.png
+          RES=android/app/src/main/res
+
+          if [ -f "$ICON" ]; then
+            echo "✅ Icon found, injecting..."
+
+            for d in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+              mkdir -p $RES/$d
+              cp $ICON $RES/$d/ic_launcher.png
+            done
+
+            mkdir -p $RES/mipmap-anydpi-v26
+
+            echo '<?xml version="1.0" encoding="utf-8"?>' >  $RES/mipmap-anydpi-v26/ic_launcher.xml
+            echo '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">' >> $RES/mipmap-anydpi-v26/ic_launcher.xml
+            echo '  <background android:drawable="@mipmap/ic_launcher"/>' >> $RES/mipmap-anydpi-v26/ic_launcher.xml
+            echo '  <foreground android:drawable="@mipmap/ic_launcher"/>' >> $RES/mipmap-anydpi-v26/ic_launcher.xml
+            echo '</adaptive-icon>' >> $RES/mipmap-anydpi-v26/ic_launcher.xml
+
+          else
+            echo "⚠️ assets/icon.png NOT FOUND — skipping icon injection"
+          fi
+
+      # 8️⃣ Sync Capacitor
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # 9️⃣ Build Debug APK
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # 🔟 Upload APK
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPS-Map-Camera-Debug-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
