@@ -1,0 +1,109 @@
+name: build-android
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Add Android platform
+        run: |
+          npx cap add android || echo "android already added"
+
+      # ================= ICON INJECT =================
+      - name: Inject App Icon
+        run: |
+          ICON=assets/icon.png
+          RES=android/app/src/main/res
+
+          if [ ! -f "$ICON" ]; then
+            echo "❌ assets/icon.png not found"
+            exit 1
+          fi
+
+          for D in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+            mkdir -p "$RES/$D"
+            cp "$ICON" "$RES/$D/ic_launcher.png"
+            cp "$ICON" "$RES/$D/ic_launcher_round.png"
+          done
+
+          mkdir -p "$RES/mipmap-anydpi-v26"
+
+          cat > "$RES/mipmap-anydpi-v26/ic_launcher.xml" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+  <background android:drawable="@android:color/white"/>
+  <foreground android:drawable="@mipmap/ic_launcher"/>
+</adaptive-icon>
+EOF
+
+          cp "$RES/mipmap-anydpi-v26/ic_launcher.xml" \
+             "$RES/mipmap-anydpi-v26/ic_launcher_round.xml"
+
+          echo "✅ App icon injected"
+
+      # ================= MANIFEST PATCH =================
+      - name: Inject Permissions + AdMob
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+
+          if ! grep -q "ACCESS_FINE_LOCATION" "$MANIFEST"; then
+            sed -i '/<manifest/a\
+<uses-permission android:name="android.permission.CAMERA"/>\
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>\
+<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>\
+<uses-permission android:name="android.permission.INTERNET"/>\
+<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>' "$MANIFEST"
+          fi
+
+          if ! grep -q "com.google.android.gms.ads.APPLICATION_ID" "$MANIFEST"; then
+            sed -i '/<application/a\
+<meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY"/>' "$MANIFEST"
+          fi
+
+          echo "✅ Permissions + AdMob App ID injected"
+
+      # ================= WEB ASSETS FIX =================
+      - name: Prepare Web Assets
+        run: |
+          mkdir -p www
+          cp index.html www/index.html
+
+      # ================= CAP SYNC =================
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # ================= BUILD APK =================
+      - name: Build Debug APK
+        run: |
+          cd android
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
