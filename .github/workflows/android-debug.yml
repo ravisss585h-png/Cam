@@ -1,0 +1,100 @@
+name: Android Debug Build
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ CHECKOUT
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ NODE SETUP
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install NPM dependencies
+        run: npm install
+
+      # 3️⃣ JAVA SETUP
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 4️⃣ ADD ANDROID PLATFORM
+      - name: Add Android Platform
+        run: npx cap add android || true
+
+      # 5️⃣ APP ICON INJECT
+      - name: Inject App Icon
+        shell: bash
+        run: |
+          ICON=assets/icon.png
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p android/app/src/main/res/mipmap-$d
+            cp $ICON android/app/src/main/res/mipmap-$d/ic_launcher.png
+          done
+
+      # 6️⃣ SAFE MANIFEST UPDATE (NO FUNCTIONS, NO ERRORS)
+      - name: Safe Manifest Update
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xmlstarlet
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          ANDROID_NS="http://schemas.android.com/apk/res/android"
+
+          xmlstarlet ed -L -N a="$ANDROID_NS" \
+            -s /manifest -t elem -n uses-permission -v "" \
+            -i /manifest/uses-permission[last()] -t attr -n a:name -v android.permission.INTERNET \
+            "$MANIFEST" || true
+
+          xmlstarlet ed -L -N a="$ANDROID_NS" \
+            -s /manifest -t elem -n uses-permission -v "" \
+            -i /manifest/uses-permission[last()] -t attr -n a:name -v android.permission.CAMERA \
+            "$MANIFEST" || true
+
+          xmlstarlet ed -L -N a="$ANDROID_NS" \
+            -s /manifest -t elem -n uses-permission -v "" \
+            -i /manifest/uses-permission[last()] -t attr -n a:name -v android.permission.ACCESS_FINE_LOCATION \
+            "$MANIFEST" || true
+
+          xmlstarlet ed -L -N a="$ANDROID_NS" \
+            -s /manifest -t elem -n uses-permission -v "" \
+            -i /manifest/uses-permission[last()] -t attr -n a:name -v android.permission.ACCESS_COARSE_LOCATION \
+            "$MANIFEST" || true
+
+          xmlstarlet ed -L -N a="$ANDROID_NS" \
+            -s /manifest/application -t elem -n meta-data -v "" \
+            -i /manifest/application/meta-data[last()] -t attr -n a:name -v com.google.android.gms.ads.APPLICATION_ID \
+            -i /manifest/application/meta-data[last()] -t attr -n a:value -v ca-app-pub-3940256099942544~3347511713 \
+            "$MANIFEST" || true
+
+      # 7️⃣ CAPACITOR SYNC
+      - name: Capacitor Sync
+        run: npx cap sync android
+
+      # 8️⃣ BUILD DEBUG APK
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # 9️⃣ UPLOAD APK
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
