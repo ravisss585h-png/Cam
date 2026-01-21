@@ -1,0 +1,90 @@
+name: build-android
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Add Android platform
+        run: |
+          npx cap add android || echo "Android already added"
+
+      # ===============================
+      # ✅ INJECT APP ICON (SAFE)
+      # ===============================
+      - name: Inject App Icon
+        run: |
+          ICON="assets/icon.png"
+          RES="android/app/src/main/res"
+
+          if [ ! -f "$ICON" ]; then
+            echo "❌ icon.png not found at assets/icon.png"
+            exit 1
+          fi
+
+          for D in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+            mkdir -p "$RES/$D"
+            cp "$ICON" "$RES/$D/ic_launcher.png"
+          done
+
+      # ===============================
+      # ✅ PREPARE WEB ASSETS (AUTO)
+      # ===============================
+      - name: Prepare Web Assets for Capacitor
+        run: |
+          mkdir -p www
+
+          FOUND=$(find . -name index.html | head -n 1)
+
+          if [ -z "$FOUND" ]; then
+            echo "❌ index.html not found anywhere in repo"
+            exit 1
+          fi
+
+          echo "✅ Found index.html at $FOUND"
+          cp "$FOUND" www/index.html
+
+      # ===============================
+      # ✅ SYNC CAPACITOR
+      # ===============================
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # ===============================
+      # ✅ BUILD DEBUG APK
+      # ===============================
+      - name: Build Debug APK
+        run: |
+          cd android
+          ./gradlew assembleDebug
+
+      # ===============================
+      # ✅ UPLOAD APK
+      # ===============================
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
