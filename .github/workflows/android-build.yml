@@ -1,0 +1,79 @@
+name: Android Debug Build (AdMob Ready)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Source Code Checkout
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      # 2. Java Setup (Android ke liye)
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # 3. Node.js Setup
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 4. Dependencies Install
+      - name: Install Dependencies
+        run: npm install
+
+      # 5. Web Assets Build
+      - name: Build Web App
+        run: npm run build
+
+      # 6. Generate Icons & Splash
+      # Tumhare 'assets' folder se icons generate karke Android mein daalega
+      - name: Generate Icon Resources
+        run: |
+          npm install @capacitor/assets --save-dev
+          npx capacitor-assets generate --android
+
+      # 7. Sync Capacitor
+      # Web code aur plugins ko Android folder mein update karega
+      - name: Sync Capacitor Android
+        run: npx cap sync android
+
+      # 8. ADMOB APP ID SAFETY CHECK
+      # Yeh check karega ki Manifest me App ID hai ya nahi.
+      # Agar nahi hai, toh Google ki Test App ID inject karega taaki crash na ho.
+      - name: Inject AdMob Test App ID (If Missing)
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          TEST_APP_ID="ca-app-pub-3940256099942544~3347511713"
+          
+          if grep -q "com.google.android.gms.ads.APPLICATION_ID" "$MANIFEST"; then
+            echo "✅ AdMob App ID pehle se maujood hai. Skipping injection."
+          else
+            echo "⚠️ AdMob App ID missing! Injecting Test ID to prevent crash..."
+            sed -i "s|</application>|<meta-data android:name=\"com.google.android.gms.ads.APPLICATION_ID\" android:value=\"$TEST_APP_ID\"/>\n    </application>|" $MANIFEST
+          fi
+
+      # 9. Build APK
+      # Global Gradle use kar rahe hain kyunki wrapper missing ho sakta hai
+      - name: Build Debug APK
+        working-directory: ./android
+        run: gradle assembleDebug
+
+      # 10. Upload APK Artifact
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gps-camera-debug-app
+          path: android/app/build/outputs/apk/debug/app-debug.apk
