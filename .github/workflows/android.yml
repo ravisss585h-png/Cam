@@ -1,0 +1,78 @@
+name: Android Build (GPS Map Camera Pro)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout repository
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # 2️⃣ Setup Node.js (Capacitor)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # 3️⃣ Install dependencies
+      - name: Install NPM dependencies
+        run: npm install
+
+      # 4️⃣ Setup Java (Android)
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # 5️⃣ Setup Android SDK
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 6️⃣ Capacitor sync
+      - name: Capacitor Sync
+        run: npx cap sync android
+
+      # 7️⃣ 🔐 Inject Android Permissions (AUTOMATED)
+      - name: Inject permissions into AndroidManifest
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+
+          # Remove closing manifest tag temporarily
+          sed -i 's#</manifest>##g' $MANIFEST
+
+          # Inject permissions
+          cat <<EOF >> $MANIFEST
+          <uses-permission android:name="android.permission.CAMERA"/>
+          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+          <uses-permission android:name="android.permission.INTERNET"/>
+          <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+          <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+          <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
+          </manifest>
+          EOF
+
+      # 8️⃣ Grant Gradle permissions
+      - name: Grant execute permission for gradlew
+        run: chmod +x android/gradlew
+
+      # 9️⃣ Build Debug APK
+      - name: Build Debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      # 🔟 Upload APK
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gps-map-camera-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
