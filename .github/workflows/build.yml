@@ -1,0 +1,86 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. कोड डाउनलोड करें
+      - name: Checkout Source
+        uses: actions/checkout@v3
+
+      # 2. Java और Node.js सेट करें
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+
+      # 3. सारी फाइल्स इनस्टॉल करें (Capacitor, AdMob, etc.)
+      - name: Install Dependencies
+        run: npm install
+
+      # 4. Android फोल्डर बनाएं (क्योंकि आपके Repo में नहीं है)
+      - name: Add Android Platform
+        run: npx cap add android
+
+      # 5. Icon Generate करें (assets/icon.png से)
+            - name: Generate App Icon
+        run: |
+          # यह अपने आप assets/icon.png ढूंढ लेगा
+          npx capacitor-assets generate --android
+
+
+      # 6. Web Assets (www folder) को Android में कॉपी करें
+      - name: Sync Capacitor
+        run: npx cap sync
+
+      # 7. 🔥 AndroidManifest.xml में Permissions और AdMob ID इंजेक्ट करें
+      # यह स्टेप सबसे ज़रूरी है क्योंकि Android फोल्डर नया बना है
+      - name: Inject Permissions & AdMob
+        run: |
+          MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
+          
+          # 1. Permissions जोड़ें (Camera, GPS, Internet, Storage)
+          sed -i '/<application/i \
+          <uses-permission android:name="android.permission.INTERNET" /> \
+          <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /> \
+          <uses-permission android:name="android.permission.CAMERA" /> \
+          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" /> \
+          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" /> \
+          <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" /> \
+          <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" /> \
+          <uses-feature android:name="android.hardware.camera" android:required="true" /> \
+          <uses-feature android:name="android.hardware.location.gps" />' $MANIFEST_PATH
+
+                    # 2. AdMob App ID जोड़ें (Application Tag के अंदर)
+          sed -i '/<activity/i \
+          <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-7807602925578307~7450691474"/>' $MANIFEST_PATH
+
+
+          # चेक करें कि बदलाव हुए या नहीं
+          cat $MANIFEST_PATH
+
+      # 8. Gradle Build (APK बनाना)
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # 9. APK को GitHub पर अपलोड करें ताकि आप डाउनलोड कर सकें
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPS-Map-Camera-Pro
+          path: android/app/build/outputs/apk/debug/app-debug.apk
