@@ -1,0 +1,93 @@
+name: Android Release Build
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # -----------------------------
+      # 1️⃣ CHECKOUT
+      # -----------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------
+      # 2️⃣ NODE (STABLE FOR CAPACITOR)
+      # -----------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # -----------------------------
+      # 3️⃣ JAVA 17
+      # -----------------------------
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # -----------------------------
+      # 4️⃣ INSTALL DEPENDENCIES
+      # -----------------------------
+      - name: Install npm dependencies
+        run: npm install
+
+      # -----------------------------
+      # 5️⃣ BUILD WEB (SAME LOGIC)
+      # -----------------------------
+      - name: Build web
+        run: npm run build || echo "No web build step"
+
+      # -----------------------------
+      # 6️⃣ CAPACITOR ANDROID SETUP
+      # -----------------------------
+      - name: Add Android platform
+        run: |
+          npx cap add android || true
+          npx cap sync android
+
+      # -----------------------------
+      # 7️⃣ SAFE MANIFEST INJECTION (NO OVERWRITE)
+      # -----------------------------
+      - name: Inject AdMob App ID safely
+        run: |
+          sed -i '/<application/a \
+          <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-XXXXXXXXXXXX~XXXXXXXXXX"/>' \
+          android/app/src/main/AndroidManifest.xml
+
+      # -----------------------------
+      # 8️⃣ REMOVE RESTRICTED PERMISSION (POLICY SAFE)
+      # -----------------------------
+      - name: Remove WRITE_EXTERNAL_STORAGE if exists
+        run: |
+          sed -i '/WRITE_EXTERNAL_STORAGE/d' android/app/src/main/AndroidManifest.xml
+
+      # -----------------------------
+      # 9️⃣ GRADLE PERMISSION
+      # -----------------------------
+      - name: Grant execute permission
+        run: chmod +x android/gradlew
+
+      # -----------------------------
+      # 🔟 BUILD RELEASE AAB (PLAY STORE READY)
+      # -----------------------------
+      - name: Build Android Release AAB
+        run: |
+          cd android
+          ./gradlew bundleRelease
+
+      # -----------------------------
+      # 1️⃣1️⃣ UPLOAD ARTIFACT
+      # -----------------------------
+      - name: Upload Release Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: android/app/build/outputs/bundle/release/app-release.aab
