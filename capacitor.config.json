@@ -1,0 +1,20 @@
+{
+  "appId": "com.ravi.gpscamera",
+  "appName": "GPS Map Camera Pro",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "minWebViewVersion": 87,
+    "backgroundColor": "#000000"
+  },
+  "plugins": {
+    "Filesystem": {
+      "androidRequestPermissions": true
+    },
+    "SplashScreen": {
+      "launchShowDuration": 0
+    }
+  }
+}
