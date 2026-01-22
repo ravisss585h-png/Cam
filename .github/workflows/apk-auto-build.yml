@@ -1,0 +1,77 @@
+name: Auto Generate Android & Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # 2️⃣ Node
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # 3️⃣ Java (Gradle ke liye)
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 4️⃣ npm install
+      - name: Install npm deps
+        run: npm install
+
+      # 5️⃣ Capacitor CLI
+      - name: Install Capacitor
+        run: npm install -g @capacitor/cli
+
+      # 6️⃣ 🔥 AUTO CREATE ANDROID + GRADLE (MOST IMPORTANT)
+      - name: Auto create Android project
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      # 7️⃣ Inject permissions
+      - name: Inject Android permissions
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          sed -i '/<manifest/a\
+          <uses-permission android:name="android.permission.CAMERA"/>\
+          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>\
+          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>\
+          <uses-permission android:name="android.permission.INTERNET"/>\
+          <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\
+          <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\
+          <uses-permission android:name="android.permission.WAKE_LOCK"/>\
+          ' $MANIFEST
+
+      # 8️⃣ Inject app icon
+      - name: Inject App Icon
+        run: |
+          for DIR in android/app/src/main/res/mipmap-*; do
+            cp assets/icon.png $DIR/ic_launcher.png
+          done
+
+      # 9️⃣ Build APK
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # 🔟 Upload APK
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gps-map-camera-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
