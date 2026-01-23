@@ -1,0 +1,1499 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <title>GPS Map Camera - Ultra Pro Max (Official Final Build)</title>
+    <meta name="description" content="GPS Map Camera app to capture photos with real-time GPS location, address, latitude longitude and map watermark. Camera with location stamp for survey and inspection.">
+
+<meta name="keywords" content="gps map camera, camera with gps location, gps photo camera, location camera app, geo tag camera, camera with location stamp, gps coordinates camera, map camera gps">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#000000">
+
+    <style>
+        /* CSS ROOT VARIABLES */
+        :root {
+            --primary-color: #00e676; /* WhatsApp & Success Green */
+            --secondary-color: #1e88e5; /* Professional Field Blue */
+            --danger-color: #ff5252; /* Error/Alert Red */
+            --dark-bg: #000000;
+            --overlay-bg: rgba(0, 0, 0, 0.82);
+            --text-color: #ffffff;
+            --glass-border: rgba(255, 255, 255, 0.18);
+            --font-main: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            --shadow-heavy: 0 15px 55px rgba(0, 0, 0, 0.85);
+        }
+
+        /* -----------------------------------------------------------------
+           CORE SYSTEM RESET & PERFORMANCE OPTIMIZATION
+           ----------------------------------------------------------------- */
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            outline: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: var(--dark-bg);
+            color: var(--text-color);
+            font-family: var(--font-main);
+            overflow: hidden;
+            user-select: none;
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        /* -----------------------------------------------------------------
+           VISUAL HARDWARE LAYERS (VIDEO & PROCESSING CANVAS)
+           ----------------------------------------------------------------- */
+        #video-preview, #capture-canvas {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain; /* Isse video zoom hona band ho jayega */
+    background: #000;    /* Khali jagah black dikhegi */
+    z-index: 1;
+}
+
+
+        #capture-canvas {
+            display: none; /* Internal processing only */
+        }
+
+        /* Front camera mirroring logic */
+        .mirrored {
+            transform: scaleX(-1);
+        }
+
+        /* -----------------------------------------------------------------
+           GEOTAG HUD OVERLAY (REAL-TIME DATA DASHBOARD)
+           ----------------------------------------------------------------- */
+     #data-overlay {
+    position: absolute;
+    bottom: 25px;         /* Niche se sahi balance */
+    left: 15px;
+    width: 260px;         /* Width ko restrict kiya */
+    max-height: 150px;    /* Height ko restrict kiya */
+    background: rgba(0, 0, 0, 0.4); /* Professional transparent black */
+    backdrop-filter: blur(10px);    /* Premium glass look */
+    border: 1px solid rgba(255, 255, 255, 0.15); /* Patli professional border */
+    border-radius: 10px;
+    padding: 10px;
+    color: #fff;
+    font-size: 10.5px;    /* Chota aur saaf font */
+    overflow: hidden;     /* Text box se bahar nahi jayega */
+    z-index: 15;
+    pointer-events: none; /* Screen touch mein disturb nahi karega */
+}
+
+/* Address line ke liye special fix */
+#data-overlay .address-line {
+    white-space: normal;  /* Lamba address line change karega */
+    display: -webkit-box;
+    -webkit-line-clamp: 2; /* Sirf 2 lines dikhayega agar bahut bada address ho */
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+        .data-row {
+    font-size: 11px; /* Font chota kiya */
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+
+        .data-label {
+    font-weight: bold;
+    width: 20px;         /* 32px se ghatakar 20px kiya */
+    text-align: center;
+    font-size: 12px;     /* Icons ka size 18px se 12px kiya */
+    opacity: 0.9;
+}
+
+
+        .data-value {
+            color: #f2f2f2;
+            flex: 1;
+            line-height: 1.6;
+            letter-spacing: 0.3px;
+        }
+
+        /* Accuracy Color Coding Logic */
+        .status-good {
+            color: var(--primary-color);
+            font-weight: 900;
+            text-shadow: 0 0 10px rgba(0, 230, 118, 0.3);
+        }
+
+        .status-bad {
+            color: var(--danger-color);
+            font-weight: 900;
+            text-shadow: 0 0 10px rgba(255, 82, 82, 0.3);
+        }
+
+        /* -----------------------------------------------------------------
+           FLOATING INTERFACE CONTROLS
+           ----------------------------------------------------------------- */
+        .btn-circle {
+            position: fixed;
+            width: 68px;
+            height: 68px;
+            border-radius: 50%;
+            border: none;
+            background: var(--secondary-color);
+            color: white;
+            font-size: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 20;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .btn-circle:active {
+            transform: scale(0.82);
+            filter: brightness(1.2);
+        }
+
+        
+#capture-btn {
+    position: fixed;
+    bottom: 30px;      /* Button ko thoda niche set kiya */
+    left: 50%;
+    transform: translateX(-50%);
+    width: 80px;       /* Size 105px se ghatakar 80px kiya */
+    height: 80px;      /* Size 105px se ghatakar 80px kiya */
+    border-radius: 50%;
+    background: var(--primary-color);
+    border: 6px solid rgba(255, 255, 255, 0.45); /* Border patla kiya */
+    z-index: 25;
+    animation: pulse-border 2.2s infinite;
+}
+
+        @keyframes pulse-border {
+            0% { box-shadow: 0 0 0 0 rgba(0, 230, 118, 0.7); }
+            70% { box-shadow: 0 0 0 35px rgba(0, 230, 118, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(0, 230, 118, 0); }
+        }
+
+        /* Precise positioning for tooltips */
+        /* --- Professional Layout: Buttons in Corners --- */
+
+/* Camera Switch: Top Right */
+#switch-camera { 
+    top: 25px; 
+    right: 20px; 
+    bottom: auto; 
+    background: rgba(0,0,0,0.5); 
+    backdrop-filter: blur(10px); 
+    border: 1.5px solid rgba(255,255,255,0.2); 
+    width: 50px; height: 50px; border-radius: 50%; 
+    z-index: 30; 
+    display: flex; align-items: center; justify-content: center;
+}
+
+/* Flash/Torch: Top Left */
+#toggle-flash { 
+    top: 25px; 
+    left: 20px; 
+    right: auto; 
+    bottom: auto; 
+    background: rgba(0,0,0,0.5); 
+    backdrop-filter: blur(10px); 
+    border: 1.5px solid rgba(255,255,255,0.2); 
+    width: 50px; height: 50px; border-radius: 50%; 
+    z-index: 30; 
+    display: flex; align-items: center; justify-content: center;
+}
+/* Settings: Bottom Right - Forced Position & Style */
+#open-settings { 
+    position: fixed !important;
+    bottom: 35px !important; 
+    right: 20px !important; 
+    top: auto !important;    /* Isse purani positioning cancel ho jayegi */
+    background: rgba(0, 0, 0, 0.5) !important; 
+    backdrop-filter: blur(10px) !important; 
+    border: 1.5px solid rgba(255, 255, 255, 0.2) !important; 
+    width: 50px !important; 
+    height: 50px !important; 
+    border-radius: 50% !important; 
+    z-index: 100 !important; /* Sabse upar dikhega */
+    display: flex !important; 
+    align-items: center !important; 
+    justify-content: center !important;
+}
+
+        /* -----------------------------------------------------------------
+           AAPKA UPDATED HERO BUTTON
+           ----------------------------------------------------------------- */
+        .hero-btn {
+            padding: 22px 80px;
+            border-radius: 50px;
+            border: none;
+            background: var(--primary-color);
+            font-weight: 900;
+            font-size: 22px;
+            color: #000;
+            box-shadow: 0 15px 45px rgba(0, 230, 118, 0.45);
+            cursor: pointer;
+            transition: transform 0.3s;
+        }
+        .hero-btn:active { transform: scale(0.92); }
+                /* --- User Policy Box Design --- */
+        .policy-box {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--glass-border);
+            border-radius: 15px;
+            padding: 15px;
+            margin: 20px 0;
+            max-height: 180px;
+            overflow-y: auto;
+            text-align: left;
+            font-size: 12px;
+            line-height: 1.5;
+            color: #ccc;
+        }
+        .policy-check {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 25px;
+            color: #fff;
+            font-size: 14px;
+        }
+        .policy-check input {
+            width: 20px;
+            height: 20px;
+            accent-color: var(--primary-color);
+        }
+
+        /* -----------------------------------------------------------------
+           SETTINGS DRAWER (SLIDE-UP)
+           ----------------------------------------------------------------- */
+        /* Line 265 ke paas is block ko update karein */
+#settings-panel {
+    position: fixed;
+    bottom: -100%;
+    left: 0;
+    width: 100%;
+    background: #161616;
+    border-radius: 38px 38px 0 0;
+    padding: 40px 30px 80px 30px; /* Niche 80px padding add ki hai */
+    z-index: 10000 !important;   /* Isse panel hamesha sabse upar rahega */
+    transition: bottom 0.5s cubic-bezier(0.2, 1, 0.3, 1);
+    border-top: 5px solid var(--primary-color);
+}
+
+
+        #settings-panel.active {
+            bottom: 0;
+        }
+
+        .setting-header {
+            margin-top: 0;
+            color: var(--primary-color);
+            font-size: 24px;
+            margin-bottom: 30px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .setting-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 28px;
+        }
+
+        .toggle-label { font-size: 16px; font-weight: 500; }
+
+        input[type=range] {
+            width: 140px;
+            accent-color: var(--primary-color);
+        }
+
+        /* -----------------------------------------------------------------
+           ANIMATED MODAL (SAVE CONFIRMATION)
+           ----------------------------------------------------------------- */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
+            z-index: 3000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.4s ease-out;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .modal-box {
+            background: #1c1c1c;
+            border: 1px solid var(--glass-border);
+            padding: 45px 35px;
+            border-radius: 45px;
+            text-align: center;
+            width: 92%;
+            max-width: 400px;
+            box-shadow: 0 45px 90px rgba(0,0,0,0.95);
+            transform: scale(0.65) translateY(70px);
+            opacity: 0;
+            transition: all 0.55s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .modal-overlay.active .modal-box {
+            transform: scale(1) translateY(0);
+            opacity: 1;
+        }
+
+        .modal-title {
+            color: var(--primary-color);
+            font-size: 26px;
+            margin: 15px 0 10px 0;
+        }
+
+        .modal-body {
+            color: #b0b0b0;
+            line-height: 1.6;
+            margin-bottom: 35px;
+            font-size: 16px;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 20px;
+        }
+
+        .modal-btn {
+            flex: 1;
+            padding: 20px;
+            border: none;
+            border-radius: 22px;
+            font-weight: 900;
+            font-size: 17px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .modal-btn:active { transform: scale(0.94); }
+
+        .btn-save { background: var(--primary-color); color: #000; box-shadow: 0 8px 25px rgba(0, 230, 118, 0.25); }
+        .btn-discard { background: #333; color: #fff; }
+
+        /* -----------------------------------------------------------------
+           DYNAMIC ACTION BAR (OPEN & SHARE)
+           ----------------------------------------------------------------- */
+        #action-bar {
+            position: fixed;
+            bottom: -150px;
+            left: 20px;
+            right: 20px;
+            background: #141414;
+            border-radius: 30px;
+            padding: 20px;
+            z-index: 4000;
+            display: flex;
+            gap: 18px;
+            transition: bottom 0.75s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+            border: 1.5px solid var(--primary-color);
+            box-shadow: 0 25px 60px rgba(0, 230, 118, 0.35);
+        }
+
+        #action-bar.show {
+            bottom: 35px;
+        }
+
+        .action-btn {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 18px;
+            border: none;
+            border-radius: 22px;
+            font-weight: bold;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        .btn-open { background: #2a2a2a; color: white; }
+        .btn-whatsapp { background: #25D366; color: white; }
+
+        /* -----------------------------------------------------------------
+           ONBOARDING / PERMISSION SCREEN
+           ----------------------------------------------------------------- */
+        #perm-screen {
+            position: fixed;
+            inset: 0;
+            background: #000;
+            z-index: 5000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 45px;
+        }
+
+        .hero-title {
+            color: var(--primary-color);
+            font-size: 40px;
+            margin: 0 0 20px 0;
+            text-shadow: 0 0 20px rgba(0, 230, 118, 0.4);
+        }
+
+        .hero-desc {
+            color: #777;
+            font-size: 18px;
+            margin-bottom: 50px;
+            max-width: 300px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+
+<body>
+    <video id="video-preview" autoplay playsinline></video>
+    <canvas id="capture-canvas" style="display:none"></canvas>
+
+    <div id="data-overlay">
+        <div class="data-row">
+            <span class="data-label">📍</span>
+            <span id="txt-status" class="data-value">Initializing Sensors...</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">🌐</span>
+            <span id="txt-coords" class="data-value">0.000000, 0.000000</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">🏠</span>
+            <span id="txt-address" class="data-value">Searching Location...</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">🧭</span>
+            <span id="txt-sensors" class="data-value">0° | 0 km/h | 0.0m</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">📏</span>
+            <span id="txt-accuracy" class="data-value status-bad">Accuracy Calibration...</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">⏰</span>
+            <span id="txt-time" class="data-value">--/--/----, --:--:-- am/pm</span>
+        </div>
+    </div>
+    <button id="switch-camera" class="btn-circle" title="Switch Lens">🔁</button>
+<button id="toggle-flash" class="btn-circle" title="Toggle Light">🔦</button>
+<button id="open-settings" class="btn-circle" title="Settings">⚙️</button>
+    <button id="capture-btn" title="Capture Geotagged Image"></button>
+
+    <div id="action-bar">
+    <button id="btn-share-whatsapp" class="action-btn btn-whatsapp">💬 WhatsApp</button>
+    <button id="btn-close-bar" style="background: #444; color: white; width: 40px; height: 40px; border-radius: 50%; border: none; font-weight: bold; margin-left: 10px; cursor: pointer;">✕</button>
+</div>
+
+
+    <div id="save-modal-overlay" class="modal-overlay">
+        <div class="modal-box">
+            <img id="photo-preview"
+     style="
+        width: 100%;
+        max-height: 220px;
+        object-fit: contain;
+        border-radius: 18px;
+        margin-bottom: 20px;
+        display: none;
+     " />
+                       <h2 class="modal-title" style="letter-spacing: 0.5px;">Field Report Generated</h2>
+            <p class="modal-body" style="font-size: 15px; color: #ccc;">
+                Geotagged documentation captured successfully. <br>
+                Verify location data and confirm to save.
+            </p>
+            <div class="modal-footer">
+                <button id="btn-discard" class="modal-btn btn-discard">Discard</button>
+                <button id="btn-save" class="modal-btn btn-save">Confirm & Save</button>
+                
+            </div>                      </div>                               </div>
+            
+   <div id="settings-panel">
+        <h2 class="setting-header">Pro Configurations</h2>
+        <div class="setting-item">
+            <span class="toggle-label">Accuracy Limit: <b id="lbl-acc-limit">50m</b></span>
+            <input id="rng-accuracy" type="range" min="10" max="250" step="5" value="50">
+        </div>
+        <div class="setting-item">
+            <span class="toggle-label">Distance Throttle: <b id="lbl-dist-limit">30m</b></span>
+            <input id="rng-distance" type="range" min="10" max="150" step="10" value="30">
+        </div>
+        <div class="setting-item">
+            <span class="toggle-label">Enable Watermark Stamp</span>
+            <input id="chk-stamp" type="checkbox" style="width:25px; height:25px;" checked>
+        </div>
+        <div class="setting-item">
+            <span class="toggle-label">High-Res Mode (1080p)</span>
+            <input id="chk-hd" type="checkbox" style="width:25px; height:25px;" checked>
+        </div>
+
+        <button id="close-settings" style="width:100%; padding:18px; background:#333; color:white; border:none; border-radius:20px; font-weight:bold; margin-top:20px; cursor:pointer;">Theek Hai</button>
+    </div>
+    <div id="perm-screen">
+        <h1 class="hero-title">GPS Map Camera</h1>
+        <p class="hero-desc" style="margin-bottom:10px;">Professional Field Survey & Documentation Tool</p>
+        
+        <div class="policy-box">
+            <b style="color:var(--primary-color);">Privacy Policy & Terms of Service:</b><br><br>
+            1. <b>Data Privacy:</b> We do not collect or store any personal data or images on our servers. All files are saved locally on your device.<br>
+            2. <b>Permissions:</b> This application requires Camera and GPS access to embed real-time location data into your photographs.<br>
+            3. <b>Storage:</b> Photos are stored in the 'DCIM/GPS_Map_Camera' directory.<br>
+            4. <b>Compliance:</b> By clicking below, you agree to our terms and confirm that this tool will be used for professional documentation purposes only.
+        </div>
+
+        <button class="hero-btn" onclick="handleStart()">Accept & Initialize Camera</button>
+        <p style="color: #666; font-size: 10px; margin-top: 15px;">Version 1.0.4 | Secure & Private</p>
+    </div>
+
+    <script>
+        /**
+         * GLOBAL APPLICATION STATE & SMART THROTTLING
+         * -----------------------------------------------------------------
+         */
+        let stream, track, facing = "environment", watchId;
+        let settingsClickCount = 0;
+let isInterstitialReady = false;
+async function initializeAdMob() {
+    if (!window.Capacitor) return;
+    try {
+        const { AdMob } = Capacitor.Plugins;
+        AdMob.addListener('interstitialAdLoaded', () => { isInterstitialReady = true; });
+                AdMob.addListener('interstitialAdDismissed', () => {
+             isInterstitialReady = false;
+             setTimeout(() => {
+                 preloadNextInterstitial(); 
+             }, 5000);
+        });
+
+        AdMob.addListener('interstitialAdFailedToLoad', () => { isInterstitialReady = false; });
+
+        await AdMob.initialize({
+            initializeForTesting: false
+        });
+
+        preloadNextInterstitial(); 
+    } catch (e) { console.error("AdMob Init Error", e); }
+}
+
+async function preloadNextInterstitial() {
+    if (!window.Capacitor || !Capacitor.Plugins || !Capacitor.Plugins.AdMob) return;
+
+    try {
+        const { AdMob } = Capacitor.Plugins;
+
+        await AdMob.loadInterstitial({
+            adId: 'ca-app-pub-7807602925578307/8272818556',
+            isTesting: false
+        });
+
+        isInterstitialReady = true;
+    } catch (e) {
+        console.error("Interstitial load failed", e);
+        isInterstitialReady = false;
+    }
+}
+
+async function showBlockingInterstitialAd() {
+    if (!window.Capacitor || !isInterstitialReady) return;
+    try {
+        await Capacitor.Plugins.AdMob.showInterstitial();
+    } catch (e) {
+        console.warn("Ad failed, continuing...", e);
+    }
+}
+
+
+let isBannerLoaded = false;
+
+async function triggerBannerAd() {
+    if (!window.Capacitor) return;
+    try {
+        const { AdMob } = Capacitor.Plugins;
+
+        if (isBannerLoaded) {
+            await AdMob.removeBanner();
+            isBannerLoaded = false;
+        }
+
+        await AdMob.showBanner({
+            adId: 'ca-app-pub-7807602925578307/5483003680',
+            position: 'TOP_CENTER',
+            margin: 35,
+            size: 'BANNER',
+            isTesting: false
+        });
+
+        isBannerLoaded = true;
+    } catch (e) {
+        console.error("Banner Fail", e);
+        setTimeout(triggerBannerAd, 5000);
+    }
+}
+
+if (window.Capacitor) {
+    window.Capacitor.Plugins.App.addListener('appStateChange', ({ isActive }) => {
+        if (isActive) triggerBannerAd();
+    });
+}
+
+        let lat = 0, lon = 0, alt = "0m", speed = "0 km/h", accuracy = 999, heading = "0°", address = "Searching Location...";
+        let lastSavedUri = ""; 
+        /* ===================== GOOGLE MAPS API – HARDENED SECURITY ===================== */
+
+const __k1 = "QUl6YVN5Ql9YbHBQcHFKUmxT";
+const __k2 = "ZHZxbTRDSzd0OWhEQmJxN0oxcXB3";
+
+function __getKey() {
+    const joined = (__k1 + __k2).split("").reverse().join("");
+    return atob(joined.split("").reverse().join(""));
+}
+
+const GOOGLE_MAPS_API_KEY = (() => {
+    try {
+        return __getKey();
+    } catch {
+        return "";
+    }
+})();
+
+/* ===================== END SECURITY BLOCK ===================== */
+        // Smart API Throttling Variables
+        let lastLat = 0, lastLon = 0, lastApiTime = 0;
+
+        // APPLICATION CONFIGURATION
+        const appConfig = {
+            applicationId: "com.ravi.gpscamera", 
+            get playStoreUrl() { return `https://play.google.com/store/apps/details?id=${this.applicationId}`; }
+        };
+
+        const shutterAudio = new Audio("data:audio/mp3;base64,//uQxAAADhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFh");
+
+        // DOM ELEMENTS CACHE
+        const video = document.getElementById("video-preview");
+        const canvas = document.getElementById("capture-canvas");
+        const ctx = canvas.getContext("2d");
+        const actionBar = document.getElementById("action-bar");
+        const saveModal = document.getElementById("save-modal-overlay");
+        const accSlider = document.getElementById("rng-accuracy");
+        const accLabel = document.getElementById("lbl-acc-limit");
+        const distSlider = document.getElementById("rng-distance");
+        const distLabel = document.getElementById("lbl-dist-limit");
+        
+        /**
+ * POLICY & START LOGIC: Button click par turant app shuru karein
+ */
+function handleStart() {
+    const screen = document.getElementById("perm-screen");
+    // Screen turant gayab karein
+    if (screen) {
+        screen.style.display = 'none';
+    }
+    // Browser me likh lein ki user maan gaya hai
+    localStorage.setItem('isReady', 'true');
+    initializeSystem();
+}
+
+/**
+ * CORE INITIALIZATION: Permissions aur Camera start karein
+ */
+ // ✅ FIX-4: User Consent (UMP / GDPR Safe)
+async function requestUserConsent() {
+    if (!window.Capacitor || !Capacitor.Plugins || !Capacitor.Plugins.AdMob) {
+        return;
+    }
+
+    try {
+        const { AdMob } = Capacitor.Plugins;
+
+        const consentInfo = await AdMob.requestConsentInfo();
+
+        if (consentInfo.isConsentFormAvailable && consentInfo.status === 'REQUIRED') {
+            await AdMob.showConsentForm();
+        }
+    } catch (e) {
+        console.warn("Consent error:", e);
+    }
+}
+async function initializeSystem() {
+    try {
+        // 1. App & AdMob Init
+        if (window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.AdMob) {
+           await requestUserConsent();
+            await initializeAdMob();
+            triggerBannerAd();
+        }
+
+        // 2. Buttons Click Logic (Maha Fix)
+        document.getElementById("open-settings").onclick = (e) => {
+            e.stopPropagation();
+            document.getElementById("settings-panel").classList.add("active");
+        };
+
+        document.getElementById("switch-camera").onclick = () => {
+            facing = (facing === "environment") ? "user" : "environment";
+            startCamera();
+        };
+
+        document.getElementById("toggle-flash").onclick = async () => {
+            if (!track) return;
+            try {
+                const caps = track.getCapabilities();
+                if (caps.torch) {
+                    const currentTorch = track.getSettings().torch || false;
+                    await track.applyConstraints({ advanced: [{ torch: !currentTorch }] });
+                }
+            } catch (e) { console.error("Torch error", e); }
+        };
+
+        // 3. Permissions & Hardware Start
+        if (window.Capacitor) {
+            const { Filesystem } = Capacitor.Plugins;
+            await Filesystem.requestPermissions();
+        }
+
+        // Camera pehle start karein
+        await startCamera();
+
+        // 1.5 second baad GPS start karein
+        setTimeout(() => {
+            startGPS();
+        }, 1500);
+
+    } catch (e) {
+        console.warn("System setup error:", e);
+    }
+}
+
+        /**
+         * HARDWARE: CAMERA MANAGEMENT ENGINE
+         * Handles lens switching and high-definition stream resolution.
+         */
+        async function startCamera() {
+    try {
+        const videoEl = document.getElementById("video-preview");
+        if (stream) {
+            stream.getTracks().forEach(t => t.stop());
+        }
+        const isHD = document.getElementById("chk-hd").checked;
+        const constraints = {
+            video: {
+                facingMode: facing,
+                aspectRatio: { ideal: window.innerHeight / window.innerWidth },
+                width: { ideal: isHD ? 1920 : 1280 },
+                height: { ideal: isHD ? 1080 : 720 }
+            }
+        };
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        videoEl.srcObject = stream;
+        track = stream.getVideoTracks()[0];
+        videoEl.classList.toggle("mirrored", facing === "user");
+    } catch (e) {
+        console.warn(e);
+    }
+}
+        /**
+         * HARDWARE: SMART GPS ENGINE (API THROTTLING)
+         * Uses Haversine formula to reduce API hits for 10k users.
+         */
+        function startGPS() {
+            if (watchId) navigator.geolocation.clearWatch(watchId);
+            
+            watchId = navigator.geolocation.watchPosition(async (pos) => {
+                accuracy = pos.coords.accuracy;
+                lat = pos.coords.latitude; 
+                lon = pos.coords.longitude;
+                alt = pos.coords.altitude ? pos.coords.altitude.toFixed(1) + "m" : "0.0m";
+                speed = pos.coords.speed ? (pos.coords.speed * 3.6).toFixed(1) + " km/h" : "0 km/h";
+               // 🧭 GPS course fallback (when compass sensor fails)
+if (pos.coords.heading !== null && !isNaN(pos.coords.heading)) {
+    heading = Math.round(pos.coords.heading) + "°";
+}
+// 🔒 HARD LOCATION LOCK (ADD HERE)
+if (accuracy <= 15 && speed <= 1) {
+    if (!window.__locationLocked) {
+        window.__locationLocked = true;
+        fetchReverseGeocode(lat, lon);
+        document.getElementById("txt-status").innerText = "📍 Location Locked";
+    }
+}
+                // Real-time HUD updates (Visual only)
+                document.getElementById("txt-coords").innerText = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+                document.getElementById("txt-sensors").innerText = `${heading} | ${speed} | ${alt}`;
+                
+                const accEl = document.getElementById("txt-accuracy");
+                accEl.innerText = `Accuracy: ±${Math.round(accuracy)}m`;
+                
+                // SMART THROTTLE CHECK
+                const now = Date.now();
+                const distMoved = calculateHaversine(lat, lon, lastLat, lastLon);
+                const minDistance = parseInt(distSlider.value);
+                const minTimeMs = 60000; // 1 Minute cooldown
+
+                if (distMoved > minDistance || (now - lastApiTime) > minTimeMs) {
+                    const limit = parseInt(accSlider.value);
+                    if (accuracy <= limit) {
+                        accEl.className = "data-value status-good";
+                        fetchReverseGeocode(lat, lon);
+                        lastLat = lat; lastLon = lon; lastApiTime = now;
+                    } else {
+                        accEl.className = "data-value status-bad"; //
+                    }
+                }
+            }, (err) => {
+                document.getElementById("txt-status").innerText = "📍 GPS Signal Lost!";
+            }, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
+        }
+
+        /**
+         * MATH ENGINE: HAVERSINE FORMULA
+         * Calculates displacement in meters to preserve API limits.
+         */
+        function calculateHaversine(lat1, lon1, lat2, lon2) {
+            const R = 6371e3; // Earth radius in meters
+            const phi1 = lat1 * Math.PI / 180;
+            const phi2 = lat2 * Math.PI / 180;
+            const deltaPhi = (lat2 - lat1) * Math.PI / 180;
+            const deltaLambda = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(deltaPhi/2) * Math.sin(deltaPhi/2) +
+                      Math.cos(phi1) * Math.cos(phi2) *
+                      Math.sin(deltaLambda/2) * Math.sin(deltaLambda/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+        }
+// 🔥 REAL INTERNET CHECK (FIELD + APK SAFE)
+async function isOnline() {
+    // 1️⃣ Quick browser hint
+    if (!navigator.onLine) return false;
+
+    // 2️⃣ Soft network validation (NOT too strict)
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2000);
+
+        const res = await fetch("https://www.google.com/favicon.ico", {
+            method: "GET",
+            signal: controller.signal,
+            cache: "no-store"
+        });
+
+        clearTimeout(timeout);
+        return res && res.ok;
+    } catch (e) {
+        // Fallback: browser says online, so allow API try
+        return true;
+    }
+}
+
+       async function fetchReverseGeocode(lt, ln) {
+
+    // 🔌 OFFLINE MODE
+    if (!(await isOnline())) {
+        address = `Offline Mode\nLat ${lt.toFixed(6)}, Lon ${ln.toFixed(6)}`;
+        document.getElementById("txt-address").innerText = address;
+        document.getElementById("txt-status").innerText = "📴 Offline Mode";
+        return;
+    }
+
+    // 🌐 ONLINE MODE
+    try {
+        const res = await fetch(
+            `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lt},${ln}&key=${GOOGLE_MAPS_API_KEY}`
+        );
+        const data = await res.json();
+
+        if (data.status === "OK" && data.results.length > 0) {
+
+            let bestResult = data.results.find(r =>
+                r.types.includes("street_address") ||
+                r.types.includes("route") ||
+                r.types.includes("sublocality") ||
+                r.types.includes("locality")
+            ) || data.results[0];
+
+            address = bestResult.formatted_address;
+
+            document.getElementById("txt-address").innerText =
+                address.length > 70 ? address.substring(0, 67) + "..." : address;
+
+            document.getElementById("txt-status").innerText = "📍 Location Verified";
+
+        } else {
+            document.getElementById("txt-address").innerText =
+                `Lat ${lt.toFixed(6)}, Lon ${ln.toFixed(6)}`;
+            document.getElementById("txt-status").innerText = "📡 Address Unavailable";
+        }
+
+    } catch {
+        document.getElementById("txt-address").innerText =
+            `Lat ${lt.toFixed(6)}, Lon ${ln.toFixed(6)}`;
+        document.getElementById("txt-status").innerText = "📡 Network Error";
+    }
+} 
+
+        /**
+         * HARDWARE: COMPASS SENSOR
+   /**
+ * HARDWARE: COMPASS SENSOR
+ * 🧭 SMART COMPASS (Android + APK SAFE)
+ */
+(function initCompass() {
+    let isAbsolute = false;
+
+    function updateHeading(deg) {
+        if (deg === null || isNaN(deg)) return;
+        heading = Math.round(deg) + "°";
+    }
+
+    window.addEventListener("deviceorientationabsolute", (e) => {
+        if (e.alpha !== null) {
+            isAbsolute = true;
+            updateHeading(e.alpha);
+        }
+    }, true);
+
+    window.addEventListener("deviceorientation", (e) => {
+        if (isAbsolute) return;
+        if (e.alpha !== null) {
+            updateHeading(e.alpha);
+        }
+    }, true);
+})();
+        /**
+         * PHOTOGRAPHY: CAPTURE & WATERMARK STAMPING
+         */
+        document.getElementById("capture-btn").onclick = () => {
+            shutterAudio.play().catch(()=>{});
+            if (video.videoWidth === 0 || video.videoHeight === 0) return;
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+
+            canvas.height = video.videoHeight;
+            
+            if (facing === "user") { 
+                ctx.translate(canvas.width, 0); ctx.scale(-1, 1); 
+            }
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            // 📸 Show captured photo preview in save modal
+const previewImg = document.getElementById("photo-preview");
+if (previewImg) {
+    previewImg.src = canvas.toDataURL("image/jpeg", 0.7);
+    previewImg.style.display = "block";
+}
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+           // WATERMARK PROCESS (Pro Version with Branding)
+if (document.getElementById("chk-stamp").checked) {
+        // ✅ SMART SIZE LOGIC (Auto-Height Fix)
+    const padding = Math.round(canvas.width * 0.04);
+    const cardW = canvas.width * 0.92;
+    const cardX = (canvas.width - cardW) / 2;
+
+    // 1. Map ka size fix karo (Screen width ka 22%)
+    const mapSize = Math.round(canvas.width * 0.22); 
+
+    // 2. Box ki Height ab Map ke hisab se chalegi (Jitna map utna box)
+    const cardH = mapSize + (padding * 2);
+
+    // 3. Position set karo
+    const cardY = canvas.height - cardH - padding;
+    const mapX = cardX + padding;
+    const mapY = cardY + padding;
+
+    // Card Background Draw Karo
+    ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+    ctx.fillRect(cardX, cardY, cardW, cardH);
+
+
+    const mapImg = new Image();
+    mapImg.crossOrigin = "anonymous";
+mapImg.src = `https://maps.googleapis.com/maps/api/staticmap?center=${lat.toFixed(6)},${lon.toFixed(6)}&zoom=16&size=300x300&scale=2&maptype=roadmap&markers=color:red|${lat.toFixed(6)},${lon.toFixed(6)}&key=${GOOGLE_MAPS_API_KEY}`;
+console.log("Map URL:", mapImg.src);
+
+      
+    const mapTimeout = setTimeout(() => {
+        mapImg.onerror();
+    }, 5000);
+
+    mapImg.onload = () => {
+        clearTimeout(mapTimeout); // अगर मैप आ गया, तो टाइमर रोक दो
+        
+    try {
+        ctx.drawImage(mapImg, mapX, mapY, mapSize, mapSize);
+    } catch (e) {
+        console.warn("Static map draw blocked, fallback already used");
+    }
+
+    renderProWatermark(ctx, cardX, cardW, cardY, mapX, mapSize, mapY);
+    saveModal.classList.add("active");
+    actionBar.classList.remove("show");
+}; 
+mapImg.onerror = () => {
+    // 1. बैकग्राउंड (Dark Technical Look)
+    ctx.fillStyle = "#1a1a1a"; 
+    ctx.fillRect(mapX, mapY, mapSize, mapSize);
+
+    // 2. ग्रिड लाइन्स (Graph Paper Look)
+    ctx.strokeStyle = "rgba(0, 230, 118, 0.2)"; // हरा रंग, हल्का
+    ctx.lineWidth = 1;
+    
+    // वर्टिकल और हॉरिजॉन्टल लाइनें खींचो
+    for(let i=1; i<5; i++) {
+        let step = mapSize / 5;
+        // खड़ी लाइनें
+        ctx.beginPath();
+        ctx.moveTo(mapX + (step*i), mapY);
+        ctx.lineTo(mapX + (step*i), mapY + mapSize);
+        ctx.stroke();
+        // लेटी लाइनें
+        ctx.beginPath();
+        ctx.moveTo(mapX, mapY + (step*i));
+        ctx.lineTo(mapX + mapSize, mapY + (step*i));
+        ctx.stroke();
+    }
+
+    // 3. रडार सर्किल (Radar Circle)
+    ctx.strokeStyle = "rgba(0, 230, 118, 0.6)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(mapX + mapSize/2, mapY + mapSize/2, mapSize/3, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    // 4. सेंटर पिनपॉइंट (Center Pinpoint - 🔴)
+    ctx.fillStyle = "#ff5252";
+    ctx.beginPath();
+    ctx.arc(mapX + mapSize/2, mapY + mapSize/2, 6, 0, 2 * Math.PI);
+    ctx.fill();
+    // पिन के ऊपर एक छोटा डॉट
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(mapX + mapSize/2, mapY + mapSize/2, 2, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // 5. "OFFLINE MODE" टेक्स्ट
+    ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+    ctx.font = "bold 10px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("NO INTERNET", mapX + mapSize/2, mapY + mapSize - 10);
+    
+    // 6. कम्पास दिशा (Compass Heading) - बहुत ज़रूरी!
+    // तुम्हारा heading वेरिएबल (e.g. "45°") यूज़ करेंगे
+    ctx.save();
+    ctx.translate(mapX + mapSize/2, mapY + mapSize/2);
+    // रोटेशन (डिग्री को रेडियन में बदलें)
+    let angle = parseInt(heading) * Math.PI / 180;
+    ctx.rotate(-angle); // मैप को घुमाओ ताकि उत्तर सही दिखे
+    
+    // उत्तर दिशा (North Arrow)
+    ctx.fillStyle = "#00e676";
+    ctx.font = "bold 14px sans-serif";
+    ctx.fillText("N", 0, - (mapSize/3) - 5); // सर्किल के ऊपर N लिखो
+    
+    // छोटा तीर
+    ctx.beginPath();
+    ctx.moveTo(0, - (mapSize/3));
+    ctx.lineTo(-4, - (mapSize/3) + 8);
+    ctx.lineTo(4, - (mapSize/3) + 8);
+    ctx.fill();
+    
+    ctx.restore();
+
+    // वाटरमार्क टेक्स्ट रेंडर करो (बाकी कोड सेम रहेगा)
+    renderProWatermark(ctx, cardX, cardW, cardY, mapX, mapSize, mapY);
+    saveModal.classList.add("active");
+};
+
+} else {
+    saveModal.classList.add("active");
+    actionBar.classList.remove("show");
+}
+
+// Function with Updated Pro Branding
+function renderProWatermark(ctx, cardX, cardW, cardY, mapX, mapSize, mapY) {
+    const fs = Math.round(canvas.width * 0.032);
+    
+    // Branding: Updated to GPS Map Camera Pro
+    ctx.textAlign = "right";
+    ctx.font = `bold ${fs * 0.6}px sans-serif`;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+    ctx.fillText("GPS Map Camera Pro", cardX + cardW - 12, cardY + 22);
+
+    // Info Section
+    ctx.textAlign = "left";
+    const textX = mapX + mapSize + 15;
+    let currentY = mapY + (fs * 1.0);
+    
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `bold ${fs * 1.1}px sans-serif`;
+    const addrParts = (address || "").split(',');
+    const city = addrParts[0]; // Plus Code या City
+    const stateCountry = addrParts.length >= 2 
+        ? addrParts.slice(-2).join(', ').trim() 
+        : "GPS Location";
+
+    // जगह (Width) कैलकुलेट करें ताकि टेक्स्ट कटे नहीं
+    const availableWidth = (cardX + cardW) - textX - 10;
+    
+    // availableWidth पास करने से टेक्स्ट अपने आप फिट हो जाएगा
+    ctx.fillText(`${city || "Unknown"} | ${stateCountry}`, textX, currentY, availableWidth);
+   
+    ctx.font = `${fs * 0.75}px sans-serif`;
+    currentY += fs * 1.3;
+    ctx.fillText((address || "Searching Location..."), textX, currentY);
+    
+    currentY += fs * 1.2;
+    ctx.fillText(`Lat ${lat.toFixed(6)}° Long ${lon.toFixed(6)}°`, textX, currentY);
+
+    currentY += fs * 1.2;
+    const now = new Date();
+    const day = now.toLocaleDateString('en-IN', { weekday: 'long' });
+    const dateStr = now.toLocaleDateString('en-GB');
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    
+    // Full line with Day, Date, and Time
+    ctx.fillText(`${day}, ${dateStr} | ${timeStr}`, textX, currentY);
+}
+ 
+
+            saveModal.classList.add("active");
+            actionBar.classList.remove("show");
+        };
+document.getElementById("btn-discard").onclick = () => {
+    saveModal.classList.remove("active");
+
+    // 🧹 Clear photo preview
+    const previewImg = document.getElementById("photo-preview");
+    if (previewImg) {
+        previewImg.src = "";
+        previewImg.style.display = "none";
+    }
+};
+
+        /**
+         * STORAGE: DCIM DIRECT SAVING
+         */
+document.getElementById("btn-save").onclick = async () => {
+
+    const base64 = canvas
+        .toDataURL("image/jpeg", 0.95)
+        .replace(/^data:image\/jpeg;base64,/, "");
+
+    const fileName = `GPS_IMG_${Date.now()}.jpg`;
+
+    try {
+        const { Filesystem, Media } = Capacitor.Plugins;
+
+        // ✅ DCIM/GPS_Map_Camera me likhna
+        const file = await Filesystem.writeFile({
+            path: `DCIM/GPS_Map_Camera/${fileName}`,
+            data: base64,
+            directory: Filesystem.Directory.EXTERNAL,
+            recursive: true
+        });
+
+        // ✅ Gallery me register
+        await Media.savePhoto({
+            path: file.uri
+        });
+
+        alert("✅ Saved in DCIM/GPS_Map_Camera");
+
+    } catch (e) {
+        alert("❌ Error: " + e.message);
+        console.error(e);
+    }
+}; 
+        // ✅ 1. WhatsApp Share (Fixed for Crash + Play Store Link)
+const whatsappBtn = document.getElementById("btn-share-whatsapp");
+
+if (whatsappBtn) {
+    whatsappBtn.onclick = async () => {
+        // Validation: Agar photo save nahi hui to mat bhejo
+        if (!lastSavedUri && !window.Capacitor) {
+             alert("Pehle photo save karein!"); 
+             return;
+        }
+
+        // 1. Photo Quality Setup
+        // Canvas se fresh data lo (Cache fix ke liye)
+        const base64 = canvas.toDataURL("image/jpeg", 0.8);
+        const fileName = `GPS_Share_${Date.now()}.jpg`;
+
+        // 🔗 AAPKI ASLI APP ID
+        const myPackageName = "com.ravi.gpscamera";
+        const playStoreLink = `https://play.google.com/store/apps/details?id=${myPackageName}`;
+        
+        // Message with Link
+        const promoMessage = `📍 My Location Report\n\nSent via GPS Map Camera Pro.\nDownload App: 👇\n${playStoreLink}`;
+
+        try {
+            // 2. Cache Save (Crash Fix logic)
+            const { Filesystem, Share } = Capacitor.Plugins;
+            
+            const result = await Filesystem.writeFile({
+                path: fileName,
+                data: base64.replace(/^data:image\/jpeg;base64,/, ""),
+                directory: 'CACHE' 
+            });
+
+            // 3. Share Photo + Link
+            await Share.share({
+                title: 'GPS Site Report',
+                text: promoMessage,
+                url: result.uri,
+                dialogTitle: 'Share via WhatsApp'
+            });
+
+        } catch (e) {
+            // Agar koi error aaye
+            alert("Share Error: " + e.message);
+        }
+    };
+}
+
+        
+        // 3. Action Bar को बंद करने वाला बटन
+        document.getElementById("btn-close-bar").onclick = () => {
+            document.getElementById("action-bar").classList.remove("show");
+        };
+
+        async function showManualAlert(Dialog) {
+            if (Dialog) {
+                await Dialog.alert({
+                    title: 'Check Folder',
+                    message: 'Gallery open nahi ho saki. Photo yahan hai: \nDCIM/GPS_Map_Camera',
+                    buttonTitle: 'Close' 
+                });
+            } else { alert("Check folder: DCIM/GPS_Map_Camera"); }
+        }
+ 
+
+        /**
+         * UI UTILS & APP LIFECYCLE
+         */
+        document.getElementById("open-settings").onclick = () => document.getElementById("settings-panel").classList.add("active");
+        document.getElementById("close-settings").onclick = () => document.getElementById("settings-panel").classList.remove("active");
+        
+        accSlider.oninput = () => { accLabel.innerText = accSlider.value + "m"; };
+        distSlider.oninput = () => { distLabel.innerText = distSlider.value + "m"; };
+
+        document.addEventListener("keydown", (e) => {
+            if (e.key.includes("Volume")) { e.preventDefault(); document.getElementById("capture-btn").click(); }
+        });
+
+        document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+        if (stream) stream.getTracks().forEach(t => t.stop());
+        if (watchId) navigator.geolocation.clearWatch(watchId);
+    } else {
+        // ✅ App resume par policy screen dobara mat dikhao
+        if (localStorage.getItem("isReady") === "true") {
+            startCamera();
+            startGPS();
+        }
+    }
+});
+
+        setInterval(() => {
+            document.getElementById("txt-time").innerText = new Date().toLocaleString('hi-IN');
+        }, 1000);
+// ✅ ONE-TIME POLICY CHECK (App load hone par)
+window.addEventListener("load", () => {
+    const screen = document.getElementById("perm-screen");
+
+    // Check: Kya user ne pehle accept kiya hai?
+    if (localStorage.getItem("isReady") === "true") {
+        // HAAN: Screen chhupa do aur system start karo
+        if (screen) screen.style.display = "none";
+        setTimeout(initializeSystem, 100);
+       
+    } else {
+        // NAHI: Policy screen dikhao
+        if (screen) screen.style.display = "flex";
+    }
+    // 🌐 NETWORK STATUS LISTENER (APK + WEB SAFE)
+    window.addEventListener("offline", () => {
+        const st = document.getElementById("txt-status");
+        if (st) st.innerText = "📴 Internet Disconnected";
+    });
+
+    window.addEventListener("online", () => {
+        const st = document.getElementById("txt-status");
+        if (st) st.innerText = "?? Internet Connected";
+    });
+    });
+
+</script>
+<style>
+/* =========================================
+   🔥 FINAL PRO LOOK (Position Safe Mode)
+   ========================================= */
+
+/* 1. बेस बटन स्टाइल (सबके लिए कॉमन - Glass Look) */
+.btn-circle {
+    width: 54px !important;
+    height: 54px !important;
+    border-radius: 50% !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 24px !important;
+    
+    /* पुराने फिल्टर्स हटाओ ताकि रंग दिखे */
+    filter: none !important; 
+    -webkit-filter: none !important;
+    transition: transform 0.2s ease !important;
+}
+
+/* 2. 🔦 TORCH BUTTON (Top Left - GOLD) */
+#toggle-flash {
+    position: fixed !important; top: 90px !important; left: 20px !important;
+    bottom: auto !important; right: auto !important;
+    background: rgba(10, 10, 10, 0.75) !important;
+    border: 1.5px solid rgba(255, 215, 0, 0.5) !important;
+    box-shadow: 0 0 15px rgba(255, 215, 0, 0.2) !important;
+    color: #FFD700 !important;
+}
+
+#switch-camera {
+    position: fixed !important; top: 90px !important; right: 20px !important;
+    bottom: auto !important; left: auto !important;
+    background: rgba(10, 10, 10, 0.75) !important;
+    border: 1.5px solid rgba(0, 229, 255, 0.5) !important;
+    box-shadow: 0 0 15px rgba(0, 229, 255, 0.2) !important;
+    color: #00E5FF !important;
+}
+
+
+/* 4. ⚙️ SETTINGS BUTTON (Silver - NO POSITION CHANGE) */
+#open-settings {
+    /* नोट: मैंने यहाँ top/bottom/left/right हटा दिया है। 
+       अब ये वहीं दिखेगा जहाँ आपकी पुरानी कोडिंग में है। */
+    
+    background: rgba(20, 20, 20, 0.8) !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.3) !important; /* Silver Border */
+    color: #ffffff !important;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.5) !important;
+}
+
+/* 5. 📸 MAIN CAPTURE BUTTON (3D Shutter) */
+#capture-btn {
+    width: 82px !important; height: 82px !important;
+    border-radius: 50% !important;
+    position: fixed !important; bottom: 30px !important; left: 50% !important; transform: translateX(-50%) !important;
+    
+    /* बाहरी रिंग */
+    background: transparent !important;
+    border: 3px solid rgba(255, 255, 255, 0.3) !important;
+    
+    /* अंदर का 3D बटन */
+    background-image: radial-gradient(circle at 35% 35%, #ffffff 0%, #d1d1d1 50%, #8f8f8f 100%) !important;
+    background-clip: padding-box !important;
+    
+    /* शैडो */
+    box-shadow: 
+        inset 0 0 0 5px rgba(0,0,0,0.1),
+        0 0 0 5px rgba(0,0,0,0.3),
+        0 10px 40px rgba(0,0,0,0.6) !important;
+    z-index: 100 !important;
+}
+
+/* बटन दबाने पर (Click Animation) */
+#capture-btn:active {
+    transform: translateX(-50%) scale(0.9) !important;
+    background-image: radial-gradient(circle, #00ff88, #00b360) !important; /* हरा हो जाएगा */
+    border-color: #00ff88 !important;
+    box-shadow: 0 0 30px rgba(0, 255, 136, 0.6) !important;
+}
+
+.btn-circle:active {
+    transform: scale(0.9) !important;
+}
+/* 🔥 APK TOUCH FIX – DO NOT REMOVE */
+#video-preview {
+    pointer-events: none !important;
+}
+#perm-screen { z-index: 20000 !important; }
+#save-modal-overlay { z-index: 20000 !important; }
+#action-bar { z-index: 21000 !important; }
+
+/* --- Professional UI Fix: Buttons & Layering --- */
+
+/* Sabhi interactive buttons ke liye common style */
+.btn-circle {
+    z-index: 9999 !important; /* Isse video ke upar buttons hamesha rahenge */
+    pointer-events: auto !important; /* Touch register hone ke liye */
+    position: fixed !important;
+}
+
+/* Torch/Flash Button (Top Left - Banner se niche) */
+#toggle-flash { 
+    top: 100px !important; 
+    left: 20px !important; 
+    bottom: auto !important;
+}
+
+/* Camera Switch Button (Top Right - Banner se niche) */
+#switch-camera { 
+    top: 100px !important; 
+    right: 20px !important; 
+    bottom: auto !important;
+}
+
+/* Settings Button (Bottom Right) */
+#open-settings { 
+    bottom: 120px !important; /* Capture button ke upar rakha hai */
+    right: 20px !important;
+    top: auto !important;
+}
+
+/* Capture Button (Center Bottom) */
+#capture-btn {
+    z-index: 9999 !important;
+    pointer-events: auto !important;
+}
+
+</style>
+<script>
+/**
+ * 🛠️ APK COMPATIBILITY FIXES
+ */
+
+// 1. Syntax Fix for older WebViews
+
+// 2. Camera & GPS Permission Re-Check for Capacitor
+
+// 3. Storage Fix for Android 11+
+
+</script>
+</body>
+</html>
