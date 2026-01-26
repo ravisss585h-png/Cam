@@ -1,0 +1,88 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Source Code Check
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      # 2. Java Setup
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # 3. Node.js Setup
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 4. Install Dependencies (Force Fix)
+      - name: Install Dependencies
+        run: |
+          npm install --legacy-peer-deps
+          npm install @capacitor/assets --save-dev --legacy-peer-deps
+
+      # 5. Create Android Folder
+      - name: Add Android Platform
+        run: npx cap add android
+
+      # 6. Generate Icon
+      - name: Generate App Icon
+        run: npx capacitor-assets generate --android
+
+      # 7. Sync Web Assets
+      - name: Sync Capacitor
+        run: npx cap sync
+
+      # 8. Inject Permissions & AdMob (FIXED & ROBUST)
+      - name: Inject Permissions & AdMob
+        run: |
+          MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
+          
+          # Inject Permissions safely after <manifest> tag
+          sed -i '/<manifest/a \
+          <uses-permission android:name="android.permission.INTERNET" /> \
+          <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /> \
+          <uses-permission android:name="android.permission.CAMERA" /> \
+          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" /> \
+          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" /> \
+          <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" /> \
+          <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" /> \
+          <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" /> \
+          <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" /> \
+          <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" /> \
+          <uses-feature android:name="android.hardware.camera" android:required="true" /> \
+          <uses-feature android:name="android.hardware.location.gps" />' $MANIFEST_PATH
+
+          # Inject AdMob ID inside <application> (Fixed for Indentation)
+          # '.*</application>' ensures it finds the closing tag even if there are spaces before it
+          sed -i 's|.*</application>| <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-7807602925578307~7450691474"/> \n&|' $MANIFEST_PATH
+
+          # Verify Content (Logs mein check karne ke liye)
+          echo "Verifying AndroidManifest.xml content:"
+          cat $MANIFEST_PATH
+
+      # 9. Build APK (With Bypass '-x lint')
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug -x lint
+
+      # 10. Upload Artifact
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPS-Map-Camera-Pro-V4
+          path: android/app/build/outputs/apk/debug/app-debug.apk
