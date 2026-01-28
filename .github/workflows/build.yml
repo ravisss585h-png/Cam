@@ -1,0 +1,88 @@
+name: Build Android Signed Release AAB
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source
+        [span_4](start_span)uses: actions/checkout@v4[span_4](end_span)
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          [span_5](start_span)node-version: '20'[span_5](end_span)
+
+      - name: Install Dependencies
+        run: |
+          npm install --legacy-peer-deps
+          [span_6](start_span)npm install @capacitor/assets --save-dev --legacy-peer-deps[span_6](end_span)
+
+      - name: Prepare Files
+        run: |
+          if [ -f "capacitor.Config.json" ]; then
+            mv capacitor.Config.json capacitor.config.json
+          fi
+          # Build web assets (dist/www folder)
+          [span_7](start_span)npm run build[span_7](end_span)
+
+      - name: Add Android & Generate Files
+        run: |
+          npx cap add android
+          [span_8](start_span)npx cap sync android[span_8](end_span)
+
+      - name: Generate App Icon
+        [span_9](start_span)run: npx capacitor-assets generate --android || echo "Skipping icon"[span_9](end_span)
+
+      - name: Inject Permissions & AdMob (Final Audit)
+        run: |
+          [span_10](start_span)MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"[span_10](end_span)
+          
+          # [span_11](start_span)Injecting all 11 permissions and features[span_11](end_span)
+          sed -i '/<application/i \
+          <uses-permission android:name="android.permission.INTERNET" /> \
+          <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /> \
+          <uses-permission android:name="android.permission.CAMERA" /> \
+          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" /> \
+          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" /> \
+          <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" /> \
+          <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" /> \
+          <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" /> \
+          <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" /> \
+          <uses-feature android:name="android.hardware.camera" android:required="true" /> \
+          <uses-feature android:name="android.hardware.location.gps" />' $MANIFEST_PATH
+          
+          # [span_12](start_span)Storage & AdMob ID Injection[span_12](end_span)
+          sed -i 's|<application|<application android:requestLegacyExternalStorage="true"|' $MANIFEST_PATH
+          sed -i 's|</application>| <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-7807602925578307~7450691474"/> \n</application>|' $MANIFEST_PATH
+
+      - name: Decode Keystore
+        run: |
+          [span_13](start_span)echo "${{ secrets.SIGNING_KEY_STORE_BASE64 }}" | base64 -d > android/app/release.jks[span_13](end_span)
+
+      - name: Build & Sign Release AAB (Direct Method)
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew bundleRelease \
+            -Pandroid.injected.signing.store.file=$(pwd)/app/release.jks \
+            -Pandroid.injected.signing.store.password=${{ secrets.SIGNING_STORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.SIGNING_KEY_ALIAS }} \
+            -[span_14](start_span)Pandroid.injected.signing.key.password=${{ secrets.SIGNING_KEY_PASSWORD }}[span_14](end_span)
+
+      - name: Upload Signed AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPS-Map-Camera-Pro-Signed-Bundle
+          [span_15](start_span)path: android/app/build/outputs/bundle/release/app-release.aab[span_15](end_span)
