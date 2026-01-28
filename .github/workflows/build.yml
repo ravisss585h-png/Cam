@@ -1,0 +1,94 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Source Code Check
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      # 2. Java Setup (Required for Android Build)
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # 3. Node.js Setup
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 4. Install Dependencies
+      - name: Install Dependencies
+        run: |
+          npm install --legacy-peer-deps
+          npm install @capacitor/assets --save-dev --legacy-peer-deps
+
+      # 5. Build Web Assets (Ye step 'www' folder banayega)
+      - name: Build Web App
+        run: npm run build
+
+      # 6. Create Android Platform (Ye AUTOMATICALLY Android folder & Gradle layega)
+      - name: Add Android Platform
+        run: npx cap add android
+
+      # 7. Generate App Icon (Agar resources folder hai toh icon banega)
+      - name: Generate App Icon
+        run: npx capacitor-assets generate --android || echo "No assets found, skipping icon generation"
+
+      # 8. Sync Web Assets (Web code ko Android folder mein copy karega)
+      - name: Sync Capacitor
+        run: npx cap sync
+
+      # 9. Inject Permissions & AdMob (Manifest file abhi bani hai, usme permissions daalna zaroori hai)
+      - name: Inject Permissions & Settings
+        run: |
+          MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
+          
+          # --- FIX 1: Safe Permission Injection ---
+          # Inject permissions strictly BEFORE the <application> tag starts
+          sed -i '/<application/i \
+          <uses-permission android:name="android.permission.INTERNET" /> \
+          <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /> \
+          <uses-permission android:name="android.permission.CAMERA" /> \
+          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" /> \
+          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" /> \
+          <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" /> \
+          <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" /> \
+          <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" /> \
+          <uses-feature android:name="android.hardware.camera" android:required="true" /> \
+          <uses-feature android:name="android.hardware.location.gps" />' $MANIFEST_PATH
+
+          # --- FIX 2: Legacy Storage Support (Important for Android 10/11) ---
+          sed -i 's|<application|<application android:requestLegacyExternalStorage="true"|' $MANIFEST_PATH
+
+          # --- FIX 3: AdMob ID Injection ---
+          # Safely insert meta-data before the closing </application> tag
+          sed -i 's|</application>| <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-7807602925578307~7450691474"/> \n</application>|' $MANIFEST_PATH
+
+          # Verify Content in Logs
+          echo "Verifying AndroidManifest.xml content:"
+          cat $MANIFEST_PATH
+
+      # 10. Build APK (Gradle wrapper ko executable banakar run karega)
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug -x lint
+
+      # 11. Upload Artifact
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPS-Map-Camera-Pro
+          path: android/app/build/outputs/apk/debug/app-debug.apk
