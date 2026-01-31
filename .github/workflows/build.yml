@@ -1,0 +1,108 @@
+name: Build Android Signed Release APK
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Dependencies
+        run: |
+          npm install --legacy-peer-deps
+          npm install @capacitor/assets --save-dev --legacy-peer-deps
+
+      - name: Prepare Web Assets
+        run: |
+          if [ -f "capacitor.Config.json" ]; then
+            mv capacitor.Config.json capacitor.config.json
+          fi
+          npm run build
+
+      - name: Initialize Capacitor Android
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Configure API 35 & Auto-Version
+        run: |
+          # 1. Force API Level 35
+          VARIABLES_PATH="android/variables.gradle"
+          if [ -f "$VARIABLES_PATH" ]; then
+            sed -i 's/targetSdkVersion = [0-9]*/targetSdkVersion = 35/' $VARIABLES_PATH
+            sed -i 's/compileSdkVersion = [0-9]*/compileSdkVersion = 35/' $VARIABLES_PATH
+          fi
+
+          # 2. AUTO-INCREMENT VERSION CODE (Fixes "Version code 1 already used")
+          # This replaces "versionCode 1" with the GitHub Run Number (e.g., 2, 3, 4...)
+          APP_GRADLE="android/app/build.gradle"
+          sed -i "s/versionCode [0-9]*/versionCode ${{ github.run_number }}/" $APP_GRADLE
+          
+          # Optional: Update version name to look like "1.0.5"
+          sed -i "s/versionName \".*\"/versionName \"1.0.${{ github.run_number }}\"/" $APP_GRADLE
+          
+          echo "Updated build to Version Code: ${{ github.run_number }}"
+
+      - name: Generate App Icon
+        run: npx capacitor-assets generate --android || echo "Skipping icon generation"
+
+      - name: Inject Full Permissions & AdMob (Video Removed)
+        run: |
+          MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
+          
+          # Inject Permissions
+          sed -i '/<application/i \
+          <uses-permission android:name="android.permission.INTERNET" /> \
+          <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /> \
+          <uses-permission android:name="android.permission.CAMERA" /> \
+          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" /> \
+          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" /> \
+          <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" /> \
+          <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" /> \
+          <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" /> \
+          <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" /> \
+          <uses-feature android:name="android.hardware.camera" android:required="true" /> \
+          <uses-feature android:name="android.hardware.location.gps" />' $MANIFEST_PATH
+          
+          # Fix Storage for Android 10 (Legacy)
+          sed -i 's|<application|<application android:requestLegacyExternalStorage="true"|' $MANIFEST_PATH
+          
+          # Inject AdMob App ID (TEST ID)
+          sed -i 's|</application>|<meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-3940256099942544~3347511713"/> \n</application>|' $MANIFEST_PATH
+
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.SIGNING_KEY_STORE_BASE64 }}" | base64 -d > android/app/release.jks
+
+      - name: Build & Sign Release APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=$(pwd)/app/release.jks \
+            -Pandroid.injected.signing.store.password=${{ secrets.SIGNING_STORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.SIGNING_KEY_ALIAS }} \
+            -Pandroid.injected.signing.key.password=${{ secrets.SIGNING_KEY_PASSWORD }}
+
+      - name: Upload Signed APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPS-Map-Camera-Pro-Final-APK
+          path: android/app/build/outputs/apk/release/app-release.apk
