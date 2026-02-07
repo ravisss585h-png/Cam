@@ -1,0 +1,115 @@
+[span_0](start_span)name: Build Android Signed Release Bundle[span_0](end_span)
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - [span_1](start_span)name: Setup Node.js[span_1](end_span)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Dependencies
+        run: |
+          [span_2](start_span)npm install --legacy-peer-deps[span_2](end_span)
+          [span_3](start_span)npm install @capacitor/assets --save-dev --legacy-peer-deps[span_3](end_span)
+
+      - name: Prepare Files
+        run: |
+          [span_4](start_span)if [ -f "capacitor.Config.json" ]; then[span_4](end_span)
+            [span_5](start_span)mv capacitor.Config.json capacitor.config.json[span_5](end_span)
+          fi
+          [span_6](start_span)npm run build[span_6](end_span)
+
+      - name: Add Android & Generate Files
+        run: |
+          [span_7](start_span)npx cap add android[span_7](end_span)
+          [span_8](start_span)npx cap sync android[span_8](end_span)
+
+      - name: Generate App Icon
+        [span_9](start_span)run: npx capacitor-assets generate --android || echo "Skipping icon"[span_9](end_span)
+
+      - name: Inject Permissions & AdMob (Complete Fix)
+        run: |
+          [span_10](start_span)MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"[span_10](end_span)
+          
+          # 1. Inject all necessary permissions for GPS Camera Pro
+          sed -i '/<application/i \
+          <uses-permission android:name="android.permission.INTERNET" /> \
+          <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /> \
+          <uses-permission android:name="android.permission.CAMERA" /> \
+          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" /> \
+          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" /> \
+          <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" /> \
+          <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" /> \
+          <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" /> \
+          <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" /> \
+          <uses-feature android:name="android.hardware.camera" android:required="true" /> \
+          [span_11](start_span)<uses-feature android:name="android.hardware.location.gps" />' $MANIFEST_PATH[span_11](end_span)
+          
+          # 2. Fix Storage Permission (Legacy Support)
+          sed -i 's|<application|<application android:requestLegacyExternalStorage="true"|' [span_12](start_span)$MANIFEST_PATH[span_12](end_span)
+          
+          # 3. Inject AdMob Application ID
+          sed -i 's|</application>|<meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-7807602925578307~7450691474"/> \n</application>|' [span_13](start_span)$MANIFEST_PATH[span_13](end_span)
+
+      - name: Enforce Android API 35 (Strict)
+        run: |
+          [span_14](start_span)echo "Forcing Target and Compile SDK to 35..."[span_14](end_span)
+          
+          # 1. Update Capacitor variables.gradle (if present)
+          [span_15](start_span)if [ -f "android/variables.gradle" ]; then[span_15](end_span)
+            [span_16](start_span)sed -i 's/compileSdkVersion = [0-9]\+/compileSdkVersion = 35/' android/variables.gradle[span_16](end_span)
+            [span_17](start_span)sed -i 's/targetSdkVersion = [0-9]\+/targetSdkVersion = 35/' android/variables.gradle[span_17](end_span)
+            [span_18](start_span)echo "Updated variables.gradle to API 35"[span_18](end_span)
+          fi
+
+          # 2. Update app/build.gradle (Standard Android config)
+          [span_19](start_span)sed -i 's/compileSdkVersion [0-9]\+/compileSdkVersion 35/' android/app/build.gradle[span_19](end_span)
+          [span_20](start_span)sed -i 's/targetSdkVersion [0-9]\+/targetSdkVersion 35/' android/app/build.gradle[span_20](end_span)
+          
+          # Handle newer Gradle syntax
+          [span_21](start_span)sed -i 's/compileSdk [0-9]\+/compileSdk 35/' android/app/build.gradle[span_21](end_span)
+          [span_22](start_span)sed -i 's/targetSdk [0-9]\+/targetSdk 35/' android/app/build.gradle[span_22](end_span)
+          
+          [span_23](start_span)echo "Strictly enforced API 35."[span_23](end_span)
+
+      - [span_24](start_span)name: Decode Keystore[span_24](end_span)
+        run: |
+          [span_25](start_span)echo "${{ secrets.SIGNING_KEY_STORE_BASE64 }}" | base64 -d > android/app/release.jks[span_25](end_span)
+
+      - name: Auto-Increment Version Code
+        run: |
+          [span_26](start_span)sed -i 's/versionCode [0-9]\+/versionCode ${{ github.run_number }}/' android/app/build.gradle[span_26](end_span)
+          [span_27](start_span)echo "Updated Version Code to ${{ github.run_number }}"[span_27](end_span)
+
+      - name: Build & Sign Release Bundle
+        run: |
+          [span_28](start_span)cd android[span_28](end_span)
+          [span_29](start_span)chmod +x gradlew[span_29](end_span)
+          ./gradlew bundleRelease \
+            -Pandroid.injected.signing.store.file=$(pwd)/app/release.jks \
+            -Pandroid.injected.signing.store.password=${{ secrets.SIGNING_STORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.SIGNING_KEY_ALIAS }} \
+            -[span_30](start_span)Pandroid.injected.signing.key.password=${{ secrets.SIGNING_KEY_PASSWORD }}[span_30](end_span)
+
+      - name: Upload Signed Bundle
+        [span_31](start_span)uses: actions/upload-artifact@v4[span_31](end_span)
+        with:
+          name: GPS-Map-Camera-Pro-Bundle
+          [span_32](start_span)path: android/app/build/outputs/bundle/release/app-release.aab[span_32](end_span)
