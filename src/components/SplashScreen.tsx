@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 
 interface SplashScreenProps {
   onComplete: () => void;
@@ -14,33 +14,38 @@ const CHECK_ITEMS = [
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
   const [progress, setProgress] = useState(0);
-  const [activeItems, setActiveItems] = useState<string[]>([]);
+  const [activeItems, setActiveItems] = useState<string[]>([CHECK_ITEMS[0].id]);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   useEffect(() => {
-    let pct = 0;
+    let pct = 15;
+    setProgress(pct);
     const interval = setInterval(() => {
-      pct += 10;
-      if (pct > 100) pct = 100;
+      pct += 17;
+      if (pct >= 100) {
+        pct = 100;
+        clearInterval(interval);
+      }
       setProgress(pct);
-      if (pct === 100) clearInterval(interval);
-    }, 150);
+    }, 180);
 
     const timers = CHECK_ITEMS.map((item, idx) =>
       setTimeout(() => {
-        setActiveItems((prev) => [...prev, item.id]);
-      }, 300 + idx * 300)
+        setActiveItems((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]));
+      }, idx * 260)
     );
 
     const doneTimer = setTimeout(() => {
-      onComplete();
-    }, 2500);
+      onCompleteRef.current();
+    }, 1500);
 
     return () => {
       clearInterval(interval);
       timers.forEach(clearTimeout);
       clearTimeout(doneTimer);
     };
-  }, [onComplete]);
+  }, []);
 
   return (
     <View style={styles.container}>
@@ -51,6 +56,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
           width: '200%',
           height: '200%',
           opacity: 0.6,
+          pointerEvents: 'none',
         }}
       />
 
@@ -101,7 +107,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
             opacity: 0.7,
           }}
         />
-        <span className="material-icons" style={{ fontSize: 50, color: '#ffffff', zIndex: 10 }}>
+        <span className="material-icons" style={{ fontSize: 48, color: '#ffffff', zIndex: 10 }}>
           gps_fixed
         </span>
       </View>
@@ -144,39 +150,50 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
       </View>
 
       <Text style={styles.loadingStatus}>SYSTEM BOOT SEQUENCE INITIATED</Text>
+
+      <TouchableOpacity
+        style={styles.skipBtn}
+        onPress={() => onCompleteRef.current()}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.skipBtnText}>Skip Boot Screen →</Text>
+      </TouchableOpacity>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
-    position: 'absolute',
+    position: 'fixed' as any,
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
+    width: '100%',
+    height: '100%',
     backgroundColor: '#000000',
     zIndex: 99999,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 24,
     overflow: 'hidden',
   },
   hudContainer: {
-    width: 140,
-    height: 140,
+    width: 132,
+    height: 132,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 30,
+    marginBottom: 24,
   },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 30,
+    marginBottom: 24,
     zIndex: 2,
   },
   splashTitle: {
     color: '#ffffff',
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: '800',
     letterSpacing: 2,
   },
@@ -189,12 +206,12 @@ const styles = StyleSheet.create({
   },
   proBadgeText: {
     color: '#000000',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
   },
   checkList: {
     width: 280,
-    marginBottom: 30,
+    marginBottom: 24,
     zIndex: 2,
   },
   checkItem: {
@@ -237,10 +254,25 @@ const styles = StyleSheet.create({
     width: 38,
   },
   loadingStatus: {
-    marginTop: 15,
+    marginTop: 14,
     fontSize: 10,
     color: '#555555',
     letterSpacing: 3,
     zIndex: 2,
+  },
+  skipBtn: {
+    marginTop: 22,
+    paddingVertical: 8,
+    paddingHorizontal: 18,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 230, 118, 0.35)',
+    backgroundColor: 'rgba(0, 230, 118, 0.08)',
+    zIndex: 10,
+  },
+  skipBtnText: {
+    color: '#00e676',
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

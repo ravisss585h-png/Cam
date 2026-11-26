@@ -65,16 +65,18 @@ export const PermissionScreen: React.FC<PermissionScreenProps> = ({
 
 const styles = StyleSheet.create({
   container: {
-    position: 'absolute',
+    position: 'fixed' as any,
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
+    width: '100%',
+    height: '100%',
     backgroundColor: '#000000',
-    zIndex: 5000,
+    zIndex: 50000,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 35,
+    padding: 28,
   },
   heroTitle: {
     color: '#00e676',

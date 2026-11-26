@@ -1,5 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions } from 'react-native';
+import { Capacitor } from '@capacitor/core';
+import { Camera } from '@capacitor/camera';
+import { Geolocation } from '@capacitor/geolocation';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
+import { Media } from '@capacitor-community/media';
 import { SplashScreen } from './components/SplashScreen';
 import { PermissionScreen } from './components/PermissionScreen';
 import { DataOverlay } from './components/DataOverlay';
@@ -76,6 +82,8 @@ export const App: React.FC = () => {
   const streamRef = useRef<MediaStream | null>(null);
   const trackRef = useRef<MediaStreamTrack | null>(null);
   const watchIdRef = useRef<number | null>(null);
+  const capWatchIdRef = useRef<string | null>(null);
+  const lastOrientationUpdateRef = useRef<number>(0);
 
   const [facing, setFacing] = useState<'environment' | 'user'>('environment');
   const [isSwitchingCamera, setIsSwitchingCamera] = useState<boolean>(false);
@@ -293,25 +301,113 @@ export const App: React.FC = () => {
     }));
   }, []);
 
-  // Device orientation listener for live Pitch & Roll Clinometer
+  // Device orientation listener for live Pitch & Roll Clinometer (throttled to avoid 60Hz re-render storms)
   useEffect(() => {
+    if (showSplash) return;
+
     const handleOrientation = (e: DeviceOrientationEvent) => {
       if (e.beta === null || e.gamma === null) return;
-      // Normalize beta (front-to-back tilt) around vertical holding angle
+      const now = Date.now();
+      if (now - lastOrientationUpdateRef.current < 300) return;
+      lastOrientationUpdateRef.current = now;
+
       const pitchDeg = Number(Math.max(-45, Math.min(45, e.beta - 90)).toFixed(1));
       const rollDeg = Number(Math.max(-30, Math.min(30, e.gamma)).toFixed(1));
       const slopeGradePct = Number((Math.tan((Math.abs(pitchDeg) * Math.PI) / 180) * 100).toFixed(1));
-      setTelemetry((prev) => ({
-        ...prev,
-        clinometer: { pitchDeg, rollDeg, slopeGradePct },
-      }));
+      setTelemetry((prev) => {
+        if (
+          Math.abs(prev.clinometer.pitchDeg - pitchDeg) < 0.5 &&
+          Math.abs(prev.clinometer.rollDeg - rollDeg) < 0.5
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          clinometer: { pitchDeg, rollDeg, slopeGradePct },
+        };
+      });
     };
 
     window.addEventListener('deviceorientation', handleOrientation);
     return () => window.removeEventListener('deviceorientation', handleOrientation);
-  }, []);
+  }, [showSplash]);
 
-  const startGPS = useCallback(() => {
+  const applyGpsCoords = useCallback(
+    (coords: {
+      latitude: number;
+      longitude: number;
+      accuracy: number;
+      altitude: number | null;
+      speed: number | null;
+      heading: number | null;
+    }) => {
+      setTelemetry((prev) => {
+        if (prev.isManualLock) return prev;
+
+        const acc = coords.accuracy;
+        const lt = coords.latitude;
+        const ln = coords.longitude;
+        const altM = coords.altitude ?? 216.0;
+        const spdKmh = coords.speed ? coords.speed * 3.6 : 0;
+        const hdgDeg =
+          coords.heading !== null && !isNaN(coords.heading)
+            ? Math.round(coords.heading)
+            : prev.headingDeg;
+
+        const now = Date.now();
+        const last = lastGeocodeRef.current;
+        const distMoved = calculateHaversine(lt, ln, last.lat, last.lon);
+        const accuracyImproved = acc < last.accuracy - 5;
+        const isGood = acc <= distanceThrottle;
+
+        if (
+          (acc <= 15 && !last.locked) ||
+          distMoved > accuracyLimit ||
+          now - last.time > 60000 ||
+          accuracyImproved
+        ) {
+          last.locked = true;
+          last.lat = lt;
+          last.lon = ln;
+          last.time = now;
+          last.accuracy = acc;
+          triggerGeocodeAndEnvironment(lt, ln);
+        }
+
+        if (isRecordingTrackRef.current && distMoved > 3) {
+          setWaypoints((wpts) => [
+            ...wpts,
+            {
+              id: `trk-${Date.now()}`,
+              lat: Number(lt.toFixed(6)),
+              lon: Number(ln.toFixed(6)),
+              label: `TRK-${wpts.length + 1}`,
+              timestamp: Date.now(),
+            },
+          ]);
+        }
+
+        return {
+          ...prev,
+          lat: lt,
+          lon: ln,
+          alt: `${altM.toFixed(1)}m`,
+          altMeters: altM,
+          speed: `${spdKmh.toFixed(1)} km/h`,
+          speedKmh: spdKmh,
+          heading: `${hdgDeg}°`,
+          headingDeg: hdgDeg,
+          accuracy: acc,
+          isAccuracyGood: isGood,
+          solar: calculateSolarPosition(lt, ln),
+          status: acc <= 15 ? 'RTK / Location Locked' : 'GNSS Tracking Active',
+        };
+      });
+    },
+    [accuracyLimit, distanceThrottle, triggerGeocodeAndEnvironment]
+  );
+
+  const startGPS = useCallback(async () => {
     if (watchIdRef.current !== null && navigator.geolocation) {
       try {
         navigator.geolocation.clearWatch(watchIdRef.current);
@@ -320,9 +416,40 @@ export const App: React.FC = () => {
       }
       watchIdRef.current = null;
     }
+    if (capWatchIdRef.current !== null && Capacitor.isNativePlatform()) {
+      try {
+        await Geolocation.clearWatch({ id: capWatchIdRef.current });
+      } catch {
+        // ignore
+      }
+      capWatchIdRef.current = null;
+    }
 
     // Fetch initial weather & solar for default coordinates
     triggerGeocodeAndEnvironment(telemetry.lat, telemetry.lon);
+
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const cId = await Geolocation.watchPosition(
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+          (pos) => {
+            if (pos && pos.coords) {
+              applyGpsCoords({
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+                accuracy: pos.coords.accuracy,
+                altitude: pos.coords.altitude,
+                speed: pos.coords.speed,
+                heading: pos.coords.heading,
+              });
+            }
+          }
+        );
+        capWatchIdRef.current = cId;
+      } catch {
+        // Fallback to web geolocation below
+      }
+    }
 
     if (!navigator.geolocation) {
       return;
@@ -330,67 +457,13 @@ export const App: React.FC = () => {
 
     watchIdRef.current = navigator.geolocation.watchPosition(
       (pos) => {
-        setTelemetry((prev) => {
-          if (prev.isManualLock) return prev;
-
-          const acc = pos.coords.accuracy;
-          const lt = pos.coords.latitude;
-          const ln = pos.coords.longitude;
-          const altM = pos.coords.altitude ?? 216.0;
-          const spdKmh = pos.coords.speed ? pos.coords.speed * 3.6 : 0;
-          const hdgDeg =
-            pos.coords.heading !== null && !isNaN(pos.coords.heading)
-              ? Math.round(pos.coords.heading)
-              : prev.headingDeg;
-
-          const now = Date.now();
-          const last = lastGeocodeRef.current;
-          const distMoved = calculateHaversine(lt, ln, last.lat, last.lon);
-          const accuracyImproved = acc < last.accuracy - 5;
-          const isGood = acc <= distanceThrottle;
-
-          if (
-            (acc <= 15 && !last.locked) ||
-            distMoved > accuracyLimit ||
-            now - last.time > 60000 ||
-            accuracyImproved
-          ) {
-            last.locked = true;
-            last.lat = lt;
-            last.lon = ln;
-            last.time = now;
-            last.accuracy = acc;
-            triggerGeocodeAndEnvironment(lt, ln);
-          }
-
-          if (isRecordingTrackRef.current && distMoved > 3) {
-            setWaypoints((wpts) => [
-              ...wpts,
-              {
-                id: `trk-${Date.now()}`,
-                lat: Number(lt.toFixed(6)),
-                lon: Number(ln.toFixed(6)),
-                label: `TRK-${wpts.length + 1}`,
-                timestamp: Date.now(),
-              },
-            ]);
-          }
-
-          return {
-            ...prev,
-            lat: lt,
-            lon: ln,
-            alt: `${altM.toFixed(1)}m`,
-            altMeters: altM,
-            speed: `${spdKmh.toFixed(1)} km/h`,
-            speedKmh: spdKmh,
-            heading: `${hdgDeg}°`,
-            headingDeg: hdgDeg,
-            accuracy: acc,
-            isAccuracyGood: isGood,
-            solar: calculateSolarPosition(lt, ln),
-            status: acc <= 15 ? 'RTK / Location Locked' : 'GNSS Tracking Active',
-          };
+        applyGpsCoords({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+          altitude: pos.coords.altitude,
+          speed: pos.coords.speed,
+          heading: pos.coords.heading,
         });
       },
       () => {
@@ -398,23 +471,48 @@ export const App: React.FC = () => {
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
-  }, [accuracyLimit, distanceThrottle, triggerGeocodeAndEnvironment]);
+  }, [applyGpsCoords, triggerGeocodeAndEnvironment]);
+
+  const requestNativeAndroidPermissions = useCallback(async () => {
+    if (!Capacitor.isNativePlatform()) return;
+    try {
+      await Camera.requestPermissions({ permissions: ['camera', 'photos'] });
+    } catch {
+      // ignore
+    }
+    try {
+      await Geolocation.requestPermissions();
+    } catch {
+      // ignore
+    }
+  }, []);
 
   useEffect(() => {
     if (!showSplash && isReady) {
-      startCamera(facing, highRes);
-      startGPS();
-      refreshGallery();
+      (async () => {
+        await requestNativeAndroidPermissions();
+        await startCamera(facing, highRes);
+        await startGPS();
+        await refreshGallery();
+      })();
     }
     return () => {
       stopCamera();
       if (watchIdRef.current !== null && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchIdRef.current);
       }
+      if (capWatchIdRef.current !== null && Capacitor.isNativePlatform()) {
+        Geolocation.clearWatch({ id: capWatchIdRef.current }).catch(() => {});
+      }
     };
   }, [showSplash, isReady]);
 
-  const handleAcceptPermissions = () => {
+  const handleSplashComplete = useCallback(() => {
+    setShowSplash(false);
+  }, []);
+
+  const handleAcceptPermissions = async () => {
+    await requestNativeAndroidPermissions();
     try {
       localStorage.setItem('policyAccepted', 'true');
       localStorage.setItem('isReady', 'true');
@@ -534,12 +632,33 @@ export const App: React.FC = () => {
       setLastSavedDataUrl(targetDataUrl);
 
       const fileName = `${projectMeta.projectId || 'GPS_PRO'}_${Date.now()}.jpg`;
-      const a = document.createElement('a');
-      a.href = targetDataUrl;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      if (Capacitor.isNativePlatform()) {
+        try {
+          const tempFile = await Filesystem.writeFile({
+            path: fileName,
+            data: base64Data,
+            directory: Directory.Cache,
+          });
+          try {
+            await Media.savePhoto({ path: tempFile.uri });
+          } catch {
+            await Filesystem.writeFile({
+              path: fileName,
+              data: base64Data,
+              directory: Directory.Documents,
+            });
+          }
+        } catch (nativeErr) {
+          console.warn('Native gallery save fallback:', nativeErr);
+        }
+      } else {
+        const a = document.createElement('a');
+        a.href = targetDataUrl;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
 
       setSaveModalVisible(false);
       setTimeout(() => {
@@ -575,6 +694,27 @@ export const App: React.FC = () => {
     if (!targetDataUrl) {
       showToast('Capture and save a field report first.');
       return;
+    }
+
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const base64Data = targetDataUrl.replace(/^data:image\/[a-z]+;base64,/, '');
+        const fileName = `GPS_SURVEY_${Date.now()}.jpg`;
+        const savedFile = await Filesystem.writeFile({
+          path: fileName,
+          data: base64Data,
+          directory: Directory.Cache,
+        });
+        await Share.share({
+          title: `Field Report · ${projectMeta.projectId}`,
+          text: `Geotagged Survey Report (${telemetry.lat.toFixed(6)}, ${telemetry.lon.toFixed(6)})\n${telemetry.address}`,
+          url: savedFile.uri,
+          dialogTitle: 'Share Geotagged Survey Photo',
+        });
+        return;
+      } catch (e) {
+        console.warn('Native share fallback:', e);
+      }
     }
 
     try {
@@ -630,7 +770,7 @@ export const App: React.FC = () => {
 
   return (
     <View style={styles.root}>
-      {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
+      {showSplash && <SplashScreen onComplete={handleSplashComplete} />}
 
       {!showSplash && !isReady && (
         <PermissionScreen
@@ -641,22 +781,42 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Top Bar Contract: 1 Row, 3 Zones (Brand Wordmark — 5 Nav Links — 1 Primary Action) */}
-      <View style={styles.topBar}>
-        <TouchableOpacity onPress={() => setActiveTab('viewfinder')}>
-          <Text style={styles.brandWordmark} numberOfLines={1}>
-            GPS Map Camera Pro
-          </Text>
-        </TouchableOpacity>
+      {/* Top Bar Contract: Desktop 1 Row 3 Zones; Mobile Compact 2-Tier Header + All 5 Tabs */}
+      <View style={[styles.topBar, !isDesktop && styles.topBarMobile]}>
+        <View style={!isDesktop ? styles.mobileBrandRow : undefined}>
+          <TouchableOpacity onPress={() => setActiveTab('viewfinder')}>
+            <Text style={styles.brandWordmark} numberOfLines={1}>
+              GPS Map Camera Pro
+            </Text>
+          </TouchableOpacity>
 
-        <View style={styles.navLinksRow}>
+          {!isDesktop && (
+            <TouchableOpacity
+              style={styles.topCtaBtnMobile}
+              onPress={() => {
+                if (galleryPhotos.length === 0) {
+                  showToast('No logged records yet — capture a photo first.');
+                  return;
+                }
+                exportPhotosToCSV(galleryPhotos);
+                showToast('Exported GIS Survey CSV.');
+              }}
+            >
+              <Text style={styles.topCtaTextMobile} numberOfLines={1}>
+                Export CSV
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <View style={[styles.navLinksRow, !isDesktop && styles.navLinksRowMobile]}>
           {(
             [
-              { id: 'viewfinder', label: 'Viewfinder' },
-              { id: 'map', label: 'Map & Parcel' },
-              { id: 'log', label: `Field Log (${galleryPhotos.length})` },
-              { id: 'designer', label: 'Stamp Designer' },
-              { id: 'calibration', label: 'Calibration' },
+              { id: 'viewfinder', label: isDesktop ? 'Viewfinder' : 'Camera' },
+              { id: 'map', label: isDesktop ? 'Map & Parcel' : 'Map' },
+              { id: 'log', label: isDesktop ? `Field Log (${galleryPhotos.length})` : `Log (${galleryPhotos.length})` },
+              { id: 'designer', label: isDesktop ? 'Stamp Designer' : 'Stamp' },
+              { id: 'calibration', label: isDesktop ? 'Calibration' : 'Sensors' },
             ] as Array<{ id: ActiveTab; label: string }>
           ).map((item) => {
             const active = activeTab === item.id;
@@ -664,9 +824,9 @@ export const App: React.FC = () => {
               <TouchableOpacity
                 key={item.id}
                 onPress={() => setActiveTab(item.id)}
-                style={styles.navLinkBtn}
+                style={[styles.navLinkBtn, !isDesktop && styles.navLinkBtnMobile, active && !isDesktop && styles.navLinkBtnMobileActive]}
               >
-                <Text style={[styles.navLinkText, active && styles.navLinkTextActive]}>
+                <Text style={[styles.navLinkText, !isDesktop && styles.navLinkTextMobile, active && styles.navLinkTextActive]}>
                   {item.label}
                 </Text>
               </TouchableOpacity>
@@ -674,21 +834,23 @@ export const App: React.FC = () => {
           })}
         </View>
 
-        <TouchableOpacity
-          style={styles.topCtaBtn}
-          onPress={() => {
-            if (galleryPhotos.length === 0) {
-              showToast('No logged records yet — capture a photo first.');
-              return;
-            }
-            exportPhotosToCSV(galleryPhotos);
-            showToast('Exported GIS Survey CSV.');
-          }}
-        >
-          <Text style={styles.topCtaText} numberOfLines={1}>
-            Export Survey CSV
-          </Text>
-        </TouchableOpacity>
+        {isDesktop && (
+          <TouchableOpacity
+            style={styles.topCtaBtn}
+            onPress={() => {
+              if (galleryPhotos.length === 0) {
+                showToast('No logged records yet — capture a photo first.');
+                return;
+              }
+              exportPhotosToCSV(galleryPhotos);
+              showToast('Exported GIS Survey CSV.');
+            }}
+          >
+            <Text style={styles.topCtaText} numberOfLines={1}>
+              Export Survey CSV
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Toast Notification */}
@@ -1251,9 +1413,24 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     zIndex: 200,
   },
+  topBarMobile: {
+    height: 'auto' as any,
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingBottom: 6,
+    gap: 6,
+  },
+  mobileBrandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+  },
   brandWordmark: {
     color: '#F8FAFC',
-    fontSize: 16,
+    fontSize: 15.5,
     fontWeight: '800',
     letterSpacing: -0.2,
   },
@@ -1262,13 +1439,36 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 18,
   },
+  navLinksRowMobile: {
+    width: '100%',
+    justifyContent: 'space-between',
+    gap: 4,
+  },
   navLinkBtn: {
     paddingVertical: 6,
+  },
+  navLinkBtnMobile: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    borderRadius: 6,
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1E293B',
+  },
+  navLinkBtnMobileActive: {
+    borderColor: '#00E676',
+    backgroundColor: 'rgba(0, 230, 118, 0.12)',
   },
   navLinkText: {
     color: '#94A3B8',
     fontSize: 13,
     fontWeight: '600',
+  },
+  navLinkTextMobile: {
+    fontSize: 11.5,
+    fontWeight: '700',
   },
   navLinkTextActive: {
     color: '#00E676',
@@ -1282,6 +1482,17 @@ const styles = StyleSheet.create({
   topCtaText: {
     color: '#07090E',
     fontSize: 12.5,
+    fontWeight: '700',
+  },
+  topCtaBtnMobile: {
+    backgroundColor: '#00E676',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+  },
+  topCtaTextMobile: {
+    color: '#07090E',
+    fontSize: 11,
     fontWeight: '700',
   },
   toastBanner: {
