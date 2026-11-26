@@ -1,0 +1,22 @@
+{
+  "name": "GPSMapCameraPro",
+  "displayName": "GPS Map Camera Pro",
+  "expo": {
+    "name": "GPS Map Camera Pro",
+    "slug": "gps-map-camera-pro",
+    "version": "2.0.9",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "android": {
+      "package": "com.ravi.gpscamera",
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    }
+  }
+}

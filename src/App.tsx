@@ -1,0 +1,1399 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions } from 'react-native';
+import { SplashScreen } from './components/SplashScreen';
+import { PermissionScreen } from './components/PermissionScreen';
+import { DataOverlay } from './components/DataOverlay';
+import { StampDesignerView, CalibrationView } from './components/SettingsModal';
+import { SaveModal, SuccessModal } from './components/SaveModal';
+import { FieldLogView, PrivacyPolicyModal } from './components/GalleryModal';
+import {
+  calculateHaversine,
+  CoordinateFormat,
+  fetchReverseGeocode,
+  formatDMS,
+  formatPlusCode,
+  formatUTM,
+  getCardinalDirection,
+  InspectionCategory,
+  StampConfig,
+  SurveyProjectMeta,
+  TelemetryState,
+} from './services/locationService';
+import {
+  deleteGalleryPhoto,
+  exportPhotosToCSV,
+  getAllGalleryPhotos,
+  SavedPhoto,
+  saveToGalleryDB,
+} from './services/galleryDb';
+import { captureGeotaggedPhoto } from './utils/watermark';
+
+const SHUTTER_WAV =
+  'data:audio/wav;base64,UklGRiIAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+
+type ActiveTab = 'viewfinder' | 'log' | 'designer' | 'calibration';
+
+const CATEGORIES: InspectionCategory[] = [
+  'Civil Survey',
+  'Site Inspection',
+  'Utility Audit',
+  'Environmental',
+  'Boundary Marker',
+];
+
+const COORD_FORMATS: CoordinateFormat[] = ['DD', 'DMS', 'UTM', 'PLUS'];
+
+export const App: React.FC = () => {
+  const [showSplash, setShowSplash] = useState<boolean>(true);
+  const [isReady, setIsReady] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('isReady') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [permDenied, setPermDenied] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<ActiveTab>('viewfinder');
+  const [windowWidth, setWindowWidth] = useState<number>(() => Dimensions.get('window').width);
+
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const isDesktop = windowWidth >= 1024;
+
+  // Camera & Optical State
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const trackRef = useRef<MediaStreamTrack | null>(null);
+  const watchIdRef = useRef<number | null>(null);
+
+  const [facing, setFacing] = useState<'environment' | 'user'>('environment');
+  const [isSwitchingCamera, setIsSwitchingCamera] = useState<boolean>(false);
+  const [isFlashOn, setIsFlashOn] = useState<boolean>(false);
+  const [cameraSimulated, setCameraSimulated] = useState<boolean>(false);
+  const [zoomLevel, setZoomLevel] = useState<number>(1);
+  const [aspectRatio, setAspectRatio] = useState<'4:3' | '16:9' | '1:1'>('4:3');
+  const [showGrid, setShowGrid] = useState<boolean>(true);
+  const [showHorizon, setShowHorizon] = useState<boolean>(true);
+  const [focusRing, setFocusRing] = useState<{ x: number; y: number; visible: boolean }>({
+    x: 0,
+    y: 0,
+    visible: false,
+  });
+
+  // Calibration & Stamp Config
+  const [accuracyLimit, setAccuracyLimit] = useState<number>(30);
+  const [distanceThrottle, setDistanceThrottle] = useState<number>(50);
+  const [highRes, setHighRes] = useState<boolean>(true);
+
+  const [stampConfig, setStampConfig] = useState<StampConfig>({
+    enabled: true,
+    template: 'engineering',
+    coordFormat: 'DD',
+    showMap: true,
+    showUTM: true,
+    showAltitudeAccuracy: true,
+    showCompass: true,
+    showProjectMeta: true,
+  });
+
+  const [projectMeta, setProjectMeta] = useState<SurveyProjectMeta>({
+    projectId: 'PRJ-2026-01',
+    surveyor: 'Ravi Suryavanshi',
+    category: 'Civil Survey',
+    notes: 'Benchmark verification & site documentation',
+    customHeader: 'GPS MAP CAMERA PRO · SURVEY TELEMETRY',
+  });
+
+  // Telemetry State
+  const [telemetry, setTelemetry] = useState<TelemetryState>({
+    status: 'Calibrating GNSS...',
+    lat: 28.613939,
+    lon: 77.209021,
+    alt: '216.0m',
+    altMeters: 216.0,
+    speed: '0.0 km/h',
+    speedKmh: 0,
+    heading: '90°',
+    headingDeg: 90,
+    accuracy: 8,
+    isAccuracyGood: true,
+    address: 'Connaught Place, New Delhi, Delhi 110001, India',
+    isManualLock: false,
+  });
+
+  const lastGeocodeRef = useRef<{
+    lat: number;
+    lon: number;
+    time: number;
+    accuracy: number;
+    locked: boolean;
+  }>({
+    lat: 0,
+    lon: 0,
+    time: 0,
+    accuracy: 999,
+    locked: false,
+  });
+
+  // Modals & Gallery
+  const [saveModalVisible, setSaveModalVisible] = useState<boolean>(false);
+  const [capturedPreviewUrl, setCapturedPreviewUrl] = useState<string>('');
+  const [capturedFullDataUrl, setCapturedFullDataUrl] = useState<string>('');
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [successModalVisible, setSuccessModalVisible] = useState<boolean>(false);
+  const [lastSavedDataUrl, setLastSavedDataUrl] = useState<string>('');
+  const [galleryPhotos, setGalleryPhotos] = useState<SavedPhoto[]>([]);
+  const [privacyVisible, setPrivacyVisible] = useState<boolean>(false);
+  const [toastMessage, setToastMessage] = useState<string>('');
+
+  const showToast = useCallback((msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage((prev) => (prev === msg ? '' : prev));
+    }, 3000);
+  }, []);
+
+  const refreshGallery = useCallback(async () => {
+    const photos = await getAllGalleryPhotos();
+    setGalleryPhotos(photos);
+  }, []);
+
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      try {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      } catch {
+        // ignore
+      }
+      streamRef.current = null;
+      trackRef.current = null;
+    }
+  }, []);
+
+  const startCamera = useCallback(
+    async (targetFacing: 'environment' | 'user', useHighRes: boolean): Promise<boolean> => {
+      stopCamera();
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setCameraSimulated(true);
+        return true;
+      }
+
+      const constraints: MediaStreamConstraints = {
+        video: {
+          facingMode: { ideal: targetFacing },
+          aspectRatio: 4 / 3,
+          width: { ideal: useHighRes ? 1600 : 1280 },
+          height: { ideal: useHighRes ? 1200 : 960 },
+          frameRate: { ideal: 30 },
+        },
+        audio: false,
+      };
+
+      try {
+        let mediaStream: MediaStream;
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+        }
+
+        streamRef.current = mediaStream;
+        const videoTrack = mediaStream.getVideoTracks()[0];
+        trackRef.current = videoTrack;
+        setCameraSimulated(false);
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = mediaStream;
+          videoRef.current.onloadedmetadata = () => {
+            videoRef.current?.play().catch(() => {});
+          };
+        }
+
+        try {
+          const capabilities = (videoTrack as any).getCapabilities?.() || {};
+          if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+            await videoTrack.applyConstraints({
+              advanced: [{ focusMode: 'continuous' } as any],
+            });
+          }
+        } catch {
+          // ignore
+        }
+
+        return true;
+      } catch {
+        setCameraSimulated(true);
+        return true;
+      }
+    },
+    [stopCamera]
+  );
+
+  const triggerGeocode = useCallback(async (lt: number, ln: number) => {
+    const res = await fetchReverseGeocode(lt, ln);
+    setTelemetry((prev) => ({
+      ...prev,
+      address: res.address,
+      status: prev.isManualLock ? 'Station Benchmark Locked' : res.status,
+    }));
+  }, []);
+
+  const startGPS = useCallback(() => {
+    if (watchIdRef.current !== null && navigator.geolocation) {
+      try {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      } catch {
+        // ignore
+      }
+      watchIdRef.current = null;
+    }
+
+    if (!navigator.geolocation) {
+      return;
+    }
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        setTelemetry((prev) => {
+          if (prev.isManualLock) return prev;
+
+          const acc = pos.coords.accuracy;
+          const lt = pos.coords.latitude;
+          const ln = pos.coords.longitude;
+          const altM = pos.coords.altitude ?? 216.0;
+          const spdKmh = pos.coords.speed ? pos.coords.speed * 3.6 : 0;
+          const hdgDeg =
+            pos.coords.heading !== null && !isNaN(pos.coords.heading)
+              ? Math.round(pos.coords.heading)
+              : prev.headingDeg;
+
+          const now = Date.now();
+          const last = lastGeocodeRef.current;
+          const distMoved = calculateHaversine(lt, ln, last.lat, last.lon);
+          const accuracyImproved = acc < last.accuracy - 5;
+          const isGood = acc <= distanceThrottle;
+
+          if (
+            (acc <= 15 && !last.locked) ||
+            distMoved > accuracyLimit ||
+            now - last.time > 60000 ||
+            accuracyImproved
+          ) {
+            last.locked = true;
+            last.lat = lt;
+            last.lon = ln;
+            last.time = now;
+            last.accuracy = acc;
+            triggerGeocode(lt, ln);
+          }
+
+          return {
+            ...prev,
+            lat: lt,
+            lon: ln,
+            alt: `${altM.toFixed(1)}m`,
+            altMeters: altM,
+            speed: `${spdKmh.toFixed(1)} km/h`,
+            speedKmh: spdKmh,
+            heading: `${hdgDeg}°`,
+            headingDeg: hdgDeg,
+            accuracy: acc,
+            isAccuracyGood: isGood,
+            status: acc <= 15 ? 'RTK / Location Locked' : 'GNSS Tracking Active',
+          };
+        });
+      },
+      () => {
+        // Keep default benchmark coordinates in preview if geolocation permission denied
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+    );
+  }, [accuracyLimit, distanceThrottle, triggerGeocode]);
+
+  useEffect(() => {
+    if (!showSplash && isReady) {
+      startCamera(facing, highRes);
+      startGPS();
+      refreshGallery();
+    }
+    return () => {
+      stopCamera();
+      if (watchIdRef.current !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      }
+    };
+  }, [showSplash, isReady]);
+
+  const handleAcceptPermissions = () => {
+    try {
+      localStorage.setItem('policyAccepted', 'true');
+      localStorage.setItem('isReady', 'true');
+    } catch {
+      // ignore
+    }
+    setPermDenied(false);
+    setIsReady(true);
+  };
+
+  const handleManualCoordinateOverride = (lat: number, lon: number, lock: boolean) => {
+    setTelemetry((prev) => ({
+      ...prev,
+      lat,
+      lon,
+      isManualLock: lock,
+      status: lock ? 'Station Benchmark Locked' : 'GNSS Tracking Active',
+    }));
+    triggerGeocode(lat, lon);
+    showToast(lock ? 'Coordinates locked to benchmark station.' : 'Live GNSS tracking resumed.');
+  };
+
+  const handleSwitchCamera = () => {
+    setIsSwitchingCamera(true);
+    const nextFacing = facing === 'user' ? 'environment' : 'user';
+    setTimeout(async () => {
+      setFacing(nextFacing);
+      await startCamera(nextFacing, highRes);
+      setIsSwitchingCamera(false);
+    }, 220);
+  };
+
+  const handleToggleFlash = async () => {
+    const track = trackRef.current;
+    if (!track) {
+      showToast('Torch unavailable on active optical stream.');
+      return;
+    }
+    try {
+      const capabilities = (track as any).getCapabilities?.() || {};
+      if (!capabilities.torch) {
+        showToast('Torch unavailable on active lens.');
+        return;
+      }
+      const nextFlash = !isFlashOn;
+      await track.applyConstraints({ advanced: [{ torch: nextFlash } as any] });
+      setIsFlashOn(nextFlash);
+    } catch {
+      showToast('Torch unavailable on active lens.');
+      setIsFlashOn(false);
+    }
+  };
+
+  const handleCapture = async () => {
+    try {
+      const audio = new Audio(SHUTTER_WAV);
+      audio.play().catch(() => {});
+
+      const { previewUrl, fullDataUrl } = await captureGeotaggedPhoto({
+        video: videoRef.current,
+        facing,
+        zoomLevel,
+        aspectRatio,
+        stampConfig,
+        projectMeta,
+        telemetry,
+      });
+
+      setCapturedPreviewUrl(previewUrl);
+      setCapturedFullDataUrl(fullDataUrl);
+      setSaveModalVisible(true);
+    } catch (err) {
+      console.error('Capture failed:', err);
+      showToast('Failed to capture field report.');
+    }
+  };
+
+  const handleConfirmSave = async () => {
+    if (!capturedFullDataUrl) return;
+    setIsSaving(true);
+    try {
+      const base64Data = capturedFullDataUrl.replace(/^data:image\/jpeg;base64,/, '');
+      await saveToGalleryDB(base64Data, {
+        projectId: projectMeta.projectId,
+        surveyor: projectMeta.surveyor,
+        category: projectMeta.category,
+        notes: projectMeta.notes,
+        lat: telemetry.lat,
+        lon: telemetry.lon,
+        utm: formatUTM(telemetry.lat, telemetry.lon),
+        dms: formatDMS(telemetry.lat, telemetry.lon),
+        altitude: telemetry.alt,
+        accuracy: telemetry.accuracy,
+        heading: telemetry.heading,
+        address: telemetry.address,
+      });
+      await refreshGallery();
+      setLastSavedDataUrl(capturedFullDataUrl);
+
+      const fileName = `${projectMeta.projectId || 'GPS_PRO'}_${Date.now()}.jpg`;
+      const a = document.createElement('a');
+      a.href = capturedFullDataUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      setSaveModalVisible(false);
+      setTimeout(() => {
+        setSuccessModalVisible(true);
+      }, 160);
+    } catch (err) {
+      console.error('Save failed:', err);
+      showToast('Failed to save field report.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteGalleryPhoto = async (id: number) => {
+    await deleteGalleryPhoto(id);
+    await refreshGallery();
+    showToast('Field record deleted.');
+  };
+
+  const handleSharePhoto = async (base64OrDataUrl?: string) => {
+    const targetDataUrl = base64OrDataUrl
+      ? base64OrDataUrl.startsWith('data:')
+        ? base64OrDataUrl
+        : `data:image/jpeg;base64,${base64OrDataUrl}`
+      : lastSavedDataUrl;
+
+    if (!targetDataUrl) {
+      showToast('Capture and save a field report first.');
+      return;
+    }
+
+    try {
+      if (navigator.share) {
+        const res = await fetch(targetDataUrl);
+        const blob = await res.blob();
+        const file = new File([blob], `GPS_SURVEY_${Date.now()}.jpg`, { type: 'image/jpeg' });
+        await navigator.share({
+          title: `Field Report · ${projectMeta.projectId}`,
+          text: `Geotagged Survey Report (${telemetry.lat.toFixed(6)}, ${telemetry.lon.toFixed(6)})`,
+          files: [file],
+        });
+        return;
+      }
+    } catch {
+      // fallback
+    }
+
+    const a = document.createElement('a');
+    a.href = targetDataUrl;
+    a.download = `GPS_SURVEY_${Date.now()}.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    showToast('Stamped report downloaded.');
+  };
+
+  const handleTapFocus = async (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setFocusRing({ x, y, visible: true });
+
+    const track = trackRef.current;
+    if (track) {
+      try {
+        const capabilities = (track as any).getCapabilities?.() || {};
+        if (capabilities.focusMode && capabilities.focusMode.includes('manual')) {
+          await track.applyConstraints({ advanced: [{ focusMode: 'manual' } as any] });
+          setTimeout(async () => {
+            await track.applyConstraints({ advanced: [{ focusMode: 'continuous' } as any] });
+          }, 500);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    setTimeout(() => {
+      setFocusRing((prev) => ({ ...prev, visible: false }));
+    }, 900);
+  };
+
+  return (
+    <View style={styles.root}>
+      {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
+
+      {!showSplash && !isReady && (
+        <PermissionScreen
+          denied={permDenied}
+          onAccept={handleAcceptPermissions}
+          onRetry={() => setPermDenied(false)}
+          onOpenPrivacyPolicy={() => setPrivacyVisible(true)}
+        />
+      )}
+
+      {/* Top Bar Contract: 1 Row, 3 Zones (Brand Wordmark — 4 Nav Links — 1 Primary Action) */}
+      <View style={styles.topBar}>
+        <TouchableOpacity onPress={() => setActiveTab('viewfinder')}>
+          <Text style={styles.brandWordmark} numberOfLines={1}>
+            GPS Map Camera Pro
+          </Text>
+        </TouchableOpacity>
+
+        <View style={styles.navLinksRow}>
+          {(
+            [
+              { id: 'viewfinder', label: 'Viewfinder' },
+              { id: 'log', label: `Field Log (${galleryPhotos.length})` },
+              { id: 'designer', label: 'Stamp Designer' },
+              { id: 'calibration', label: 'Calibration' },
+            ] as Array<{ id: ActiveTab; label: string }>
+          ).map((item) => {
+            const active = activeTab === item.id;
+            return (
+              <TouchableOpacity
+                key={item.id}
+                onPress={() => setActiveTab(item.id)}
+                style={styles.navLinkBtn}
+              >
+                <Text style={[styles.navLinkText, active && styles.navLinkTextActive]}>
+                  {item.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <TouchableOpacity
+          style={styles.topCtaBtn}
+          onPress={() => {
+            if (galleryPhotos.length === 0) {
+              showToast('No logged records yet — capture a photo first.');
+              return;
+            }
+            exportPhotosToCSV(galleryPhotos);
+            showToast('Exported GIS Survey CSV.');
+          }}
+        >
+          <Text style={styles.topCtaText} numberOfLines={1}>
+            Export Survey CSV
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Toast Notification */}
+      {toastMessage ? (
+        <View style={styles.toastBanner}>
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </View>
+      ) : null}
+
+      {/* Main Workspace Area */}
+      {activeTab === 'viewfinder' && (
+        <View style={styles.viewfinderSplitLayout}>
+          {/* Left / Main Stage: Optical Camera Viewfinder */}
+          <View style={styles.cameraStage}>
+            {/* Optical Toolbar Overlay (Zoom, Aspect Ratio, Grid, Status) */}
+            <View style={styles.opticalTopHud}>
+              <Text
+                style={[
+                  styles.telemetryStatusLabel,
+                  telemetry.isAccuracyGood ? { color: '#00E676' } : { color: '#F59E0B' },
+                ]}
+              >
+                {telemetry.isAccuracyGood ? '● ' : '▲ '}
+                {telemetry.status} · ±
+                {telemetry.accuracy >= 999 ? '--' : Math.round(telemetry.accuracy)}m
+              </Text>
+
+              <View style={styles.opticalControlsGroup}>
+                {([1, 2, 4] as const).map((z) => (
+                  <TouchableOpacity
+                    key={z}
+                    style={[styles.hudChipBtn, zoomLevel === z && styles.hudChipBtnActive]}
+                    onPress={() => setZoomLevel(z)}
+                  >
+                    <Text
+                      style={[styles.hudChipText, zoomLevel === z && styles.hudChipTextActive]}
+                    >
+                      {z}x
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+
+                <View style={styles.hudDivider} />
+
+                {(['4:3', '16:9', '1:1'] as const).map((ratio) => (
+                  <TouchableOpacity
+                    key={ratio}
+                    style={[styles.hudChipBtn, aspectRatio === ratio && styles.hudChipBtnActive]}
+                    onPress={() => setAspectRatio(ratio)}
+                  >
+                    <Text
+                      style={[
+                        styles.hudChipText,
+                        aspectRatio === ratio && styles.hudChipTextActive,
+                      ]}
+                    >
+                      {ratio}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            {/* Interactive Optical Surface */}
+            <div
+              onClick={handleTapFocus}
+              style={{
+                position: 'relative',
+                flex: 1,
+                width: '100%',
+                height: '100%',
+                backgroundColor: '#07090E',
+                overflow: 'hidden',
+                cursor: 'crosshair',
+              }}
+            >
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain',
+                  backgroundColor: '#07090E',
+                  transform: `${facing === 'user' ? 'scaleX(-1)' : 'scaleX(1)'} scale(${
+                    isSwitchingCamera ? 0.96 : zoomLevel
+                  })`,
+                  opacity: isSwitchingCamera ? 0 : 1,
+                  transition: 'transform 0.2s ease-out, opacity 0.2s ease-out',
+                  display: cameraSimulated ? 'none' : 'block',
+                }}
+              />
+
+              {cameraSimulated && (
+                <View style={styles.simulatedStage}>
+                  <View style={styles.simulatedTelemetryFrame}>
+                    <span
+                      className="material-icons"
+                      style={{ fontSize: 32, color: '#00E676', marginBottom: 8 }}
+                    >
+                      my_location
+                    </span>
+                    <Text style={styles.simulatedHeading}>
+                      Optical Survey Viewfinder ({aspectRatio} · {zoomLevel}x)
+                    </Text>
+                    <Text style={styles.simulatedSub}>
+                      {projectMeta.projectId} · {projectMeta.category} · Tap anywhere to focus or
+                      press shutter to record geotagged report
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Rule of Thirds 3x3 Optical Grid */}
+              {showGrid && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    pointerEvents: 'none',
+                    zIndex: 5,
+                  }}
+                >
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: '33.33%',
+                      top: 0,
+                      bottom: 0,
+                      width: 1,
+                      backgroundColor: 'rgba(255, 255, 255, 0.14)',
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: '66.66%',
+                      top: 0,
+                      bottom: 0,
+                      width: 1,
+                      backgroundColor: 'rgba(255, 255, 255, 0.14)',
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '33.33%',
+                      left: 0,
+                      right: 0,
+                      height: 1,
+                      backgroundColor: 'rgba(255, 255, 255, 0.14)',
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '66.66%',
+                      left: 0,
+                      right: 0,
+                      height: 1,
+                      backgroundColor: 'rgba(255, 255, 255, 0.14)',
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Artificial Horizon & Center Crosshair Reticle */}
+              {showHorizon && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: '50%',
+                    top: '42%',
+                    transform: 'translate(-50%, -50%)',
+                    width: 140,
+                    height: 140,
+                    pointerEvents: 'none',
+                    zIndex: 6,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 48,
+                      height: 48,
+                      borderRadius: '50%',
+                      border: '1px solid rgba(0, 230, 118, 0.35)',
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      width: 110,
+                      height: 1,
+                      backgroundColor: 'rgba(0, 230, 118, 0.45)',
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      width: 1,
+                      height: 70,
+                      backgroundColor: 'rgba(0, 230, 118, 0.45)',
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Tap-to-Focus Reticle */}
+              {focusRing.visible && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: focusRing.x,
+                    top: focusRing.y,
+                    width: 68,
+                    height: 68,
+                    border: '2px solid #F59E0B',
+                    borderRadius: 6,
+                    pointerEvents: 'none',
+                    zIndex: 30,
+                    transform: 'translate(-50%, -50%)',
+                  }}
+                />
+              )}
+
+              {/* Live Watermark Stamp Preview Overlay */}
+              <DataOverlay
+                telemetry={telemetry}
+                stampConfig={stampConfig}
+                projectMeta={projectMeta}
+              />
+            </div>
+
+            {/* Bottom Ergonomic Shutter & Quick Action Bar */}
+            <View style={styles.shutterBar}>
+              <TouchableOpacity
+                style={styles.controlCircleBtn}
+                onPress={() => setActiveTab('log')}
+              >
+                <span className="material-icons" style={{ color: '#F8FAFC', fontSize: 22 }}>
+                  collections
+                </span>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.controlCircleBtn} onPress={handleSwitchCamera}>
+                <span className="material-icons" style={{ color: '#F8FAFC', fontSize: 22 }}>
+                  cameraswitch
+                </span>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.shutterBtnOuter}
+                onPress={handleCapture}
+                activeOpacity={0.85}
+              >
+                <View style={styles.shutterBtnInner} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.controlCircleBtn, isFlashOn && styles.controlCircleBtnActive]}
+                onPress={handleToggleFlash}
+              >
+                <span
+                  className="material-icons"
+                  style={{ color: isFlashOn ? '#00E676' : '#F8FAFC', fontSize: 22 }}
+                >
+                  flash_on
+                </span>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.controlCircleBtn, showGrid && styles.controlCircleBtnActive]}
+                onPress={() => setShowGrid(!showGrid)}
+              >
+                <span
+                  className="material-icons"
+                  style={{ color: showGrid ? '#00E676' : '#F8FAFC', fontSize: 22 }}
+                >
+                  grid_on
+                </span>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Right Desktop Inspector Column: Live Geodetic Telemetry & Project Tagging */}
+          {isDesktop && (
+            <ScrollView style={styles.inspectorSidebar} contentContainerStyle={{ padding: 20 }}>
+              {/* Section 1: Geodetic Datum Telemetry */}
+              <Text style={styles.sidebarSectionTitle}>01. GNSS Coordinate Telemetry</Text>
+              <View style={styles.coordFormatTabs}>
+                {COORD_FORMATS.map((fmt) => {
+                  const active = stampConfig.coordFormat === fmt;
+                  return (
+                    <TouchableOpacity
+                      key={fmt}
+                      style={[styles.formatTabBtn, active && styles.formatTabBtnActive]}
+                      onPress={() => setStampConfig({ ...stampConfig, coordFormat: fmt })}
+                    >
+                      <Text style={[styles.formatTabText, active && styles.formatTabTextActive]}>
+                        {fmt}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <View style={styles.telemetryList}>
+                <View style={styles.telemetryItemRow}>
+                  <Text style={styles.telemetryKey}>Latitude / Longitude</Text>
+                  <Text style={styles.telemetryMono}>
+                    {telemetry.lat.toFixed(6)}, {telemetry.lon.toFixed(6)}
+                  </Text>
+                </View>
+                <View style={styles.telemetryItemRow}>
+                  <Text style={styles.telemetryKey}>UTM Zone / Grid</Text>
+                  <Text style={styles.telemetryMonoCyan}>
+                    {formatUTM(telemetry.lat, telemetry.lon)}
+                  </Text>
+                </View>
+                <View style={styles.telemetryItemRow}>
+                  <Text style={styles.telemetryKey}>DMS Notation</Text>
+                  <Text style={styles.telemetryMono}>
+                    {formatDMS(telemetry.lat, telemetry.lon)}
+                  </Text>
+                </View>
+                <View style={styles.telemetryItemRow}>
+                  <Text style={styles.telemetryKey}>Plus Code · Azimuth</Text>
+                  <Text style={styles.telemetryMono}>
+                    {formatPlusCode(telemetry.lat, telemetry.lon)} · {telemetry.heading} (
+                    {getCardinalDirection(telemetry.headingDeg)})
+                  </Text>
+                </View>
+                <View style={styles.telemetryItemRow}>
+                  <Text style={styles.telemetryKey}>Elevation · Horizontal Acc</Text>
+                  <Text style={styles.telemetryMono}>
+                    {telemetry.alt} · ±{Math.round(telemetry.accuracy)}m
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.sidebarDivider} />
+
+              {/* Section 2: Quick Survey Project Metadata */}
+              <Text style={styles.sidebarSectionTitle}>02. Active Survey Project Tagging</Text>
+
+              <View style={styles.sidebarField}>
+                <Text style={styles.sidebarLabel}>Project / Site ID</Text>
+                <input
+                  type="text"
+                  value={projectMeta.projectId}
+                  onChange={(e) => setProjectMeta({ ...projectMeta, projectId: e.target.value })}
+                  style={{ width: '100%' }}
+                />
+              </View>
+
+              <View style={styles.sidebarField}>
+                <Text style={styles.sidebarLabel}>Surveyor / Engineer</Text>
+                <input
+                  type="text"
+                  value={projectMeta.surveyor}
+                  onChange={(e) => setProjectMeta({ ...projectMeta, surveyor: e.target.value })}
+                  style={{ width: '100%' }}
+                />
+              </View>
+
+              <View style={styles.sidebarField}>
+                <Text style={styles.sidebarLabel}>Inspection Category</Text>
+                <View style={styles.categoryWrap}>
+                  {CATEGORIES.map((cat) => {
+                    const active = projectMeta.category === cat;
+                    return (
+                      <TouchableOpacity
+                        key={cat}
+                        style={[styles.catBtn, active && styles.catBtnActive]}
+                        onPress={() => setProjectMeta({ ...projectMeta, category: cat })}
+                      >
+                        <Text style={[styles.catBtnText, active && styles.catBtnTextActive]}>
+                          {cat}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.sidebarField}>
+                <Text style={styles.sidebarLabel}>Field Remarks / Chainage</Text>
+                <input
+                  type="text"
+                  value={projectMeta.notes}
+                  onChange={(e) => setProjectMeta({ ...projectMeta, notes: e.target.value })}
+                  placeholder="Enter benchmark or inspection remark..."
+                  style={{ width: '100%' }}
+                />
+              </View>
+
+              <View style={styles.sidebarDivider} />
+
+              {/* Section 3: Watermark Template Quick Selector */}
+              <Text style={styles.sidebarSectionTitle}>03. Stamp Layout Preset</Text>
+              <View style={styles.coordFormatTabs}>
+                {(
+                  [
+                    { id: 'engineering', label: 'GIS Block' },
+                    { id: 'compact', label: 'Compact' },
+                    { id: 'minimal', label: 'Minimal' },
+                  ] as const
+                ).map((t) => {
+                  const active = stampConfig.template === t.id;
+                  return (
+                    <TouchableOpacity
+                      key={t.id}
+                      style={[styles.formatTabBtn, active && styles.formatTabBtnActive]}
+                      onPress={() => setStampConfig({ ...stampConfig, template: t.id })}
+                    >
+                      <Text style={[styles.formatTabText, active && styles.formatTabTextActive]}>
+                        {t.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          )}
+        </View>
+      )}
+
+      {activeTab === 'log' && (
+        <FieldLogView
+          photos={galleryPhotos}
+          onDeletePhoto={handleDeleteGalleryPhoto}
+          onSharePhoto={(b64) => handleSharePhoto(b64)}
+          onBackToCamera={() => setActiveTab('viewfinder')}
+        />
+      )}
+
+      {activeTab === 'designer' && (
+        <StampDesignerView
+          stampConfig={stampConfig}
+          projectMeta={projectMeta}
+          onChangeStampConfig={setStampConfig}
+          onChangeProjectMeta={setProjectMeta}
+        />
+      )}
+
+      {activeTab === 'calibration' && (
+        <CalibrationView
+          telemetry={telemetry}
+          accuracyLimit={accuracyLimit}
+          distanceThrottle={distanceThrottle}
+          highRes={highRes}
+          showGrid={showGrid}
+          showHorizon={showHorizon}
+          onChangeAccuracyLimit={setAccuracyLimit}
+          onChangeDistanceThrottle={setDistanceThrottle}
+          onToggleHighRes={async (val) => {
+            setHighRes(val);
+            await startCamera(facing, val);
+          }}
+          onToggleGrid={setShowGrid}
+          onToggleHorizon={setShowHorizon}
+          onManualCoordinateOverride={handleManualCoordinateOverride}
+          onOpenPrivacyPolicy={() => setPrivacyVisible(true)}
+        />
+      )}
+
+      {/* Save Field Report Verification Modal */}
+      <SaveModal
+        visible={saveModalVisible}
+        previewUri={capturedPreviewUrl}
+        isSaving={isSaving}
+        telemetry={telemetry}
+        projectMeta={projectMeta}
+        onDiscard={() => {
+          setSaveModalVisible(false);
+          setCapturedPreviewUrl('');
+          setCapturedFullDataUrl('');
+        }}
+        onConfirmSave={handleConfirmSave}
+      />
+
+      {/* Saved Confirmation Modal */}
+      <SuccessModal
+        visible={successModalVisible}
+        onShare={() => handleSharePhoto()}
+        onViewLog={() => {
+          setSuccessModalVisible(false);
+          setActiveTab('log');
+        }}
+        onClose={() => setSuccessModalVisible(false)}
+      />
+
+      {/* Privacy Policy Modal */}
+      <PrivacyPolicyModal visible={privacyVisible} onClose={() => setPrivacyVisible(false)} />
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#07090E',
+    overflow: 'hidden',
+  },
+  topBar: {
+    height: 54,
+    backgroundColor: '#0B0E17',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1E293B',
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    zIndex: 200,
+  },
+  brandWordmark: {
+    color: '#F8FAFC',
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  navLinksRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 20,
+  },
+  navLinkBtn: {
+    paddingVertical: 6,
+  },
+  navLinkText: {
+    color: '#94A3B8',
+    fontSize: 13.5,
+    fontWeight: '600',
+  },
+  navLinkTextActive: {
+    color: '#00E676',
+  },
+  topCtaBtn: {
+    backgroundColor: '#00E676',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  topCtaText: {
+    color: '#07090E',
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
+  toastBanner: {
+    position: 'absolute',
+    top: 66,
+    alignSelf: 'center',
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#00E676',
+    paddingVertical: 9,
+    paddingHorizontal: 18,
+    borderRadius: 8,
+    zIndex: 30000,
+  },
+  toastText: {
+    color: '#F8FAFC',
+    fontSize: 12.5,
+    fontWeight: '600',
+  },
+  viewfinderSplitLayout: {
+    flex: 1,
+    flexDirection: 'row',
+    overflow: 'hidden',
+  },
+  cameraStage: {
+    flex: 1,
+    position: 'relative',
+    backgroundColor: '#07090E',
+    justifyContent: 'space-between',
+  },
+  opticalTopHud: {
+    position: 'absolute',
+    top: 12,
+    left: 16,
+    right: 16,
+    zIndex: 25,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  telemetryStatusLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: 'JetBrains Mono, monospace',
+    backgroundColor: 'rgba(7, 9, 14, 0.78)',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#1E293B',
+  },
+  opticalControlsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(7, 9, 14, 0.82)',
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    borderRadius: 8,
+    padding: 3,
+  },
+  hudChipBtn: {
+    paddingVertical: 5,
+    paddingHorizontal: 9,
+    borderRadius: 5,
+  },
+  hudChipBtnActive: {
+    backgroundColor: '#1E293B',
+  },
+  hudChipText: {
+    color: '#94A3B8',
+    fontSize: 11.5,
+    fontWeight: '700',
+    fontFamily: 'JetBrains Mono, monospace',
+  },
+  hudChipTextActive: {
+    color: '#00E676',
+  },
+  hudDivider: {
+    width: 1,
+    height: 16,
+    backgroundColor: '#1E293B',
+    marginHorizontal: 4,
+  },
+  simulatedStage: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#080C14',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: 140,
+  },
+  simulatedTelemetryFrame: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    maxWidth: 420,
+  },
+  simulatedHeading: {
+    color: '#F8FAFC',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  simulatedSub: {
+    color: '#64748B',
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  shutterBar: {
+    height: 92,
+    backgroundColor: 'rgba(11, 14, 23, 0.94)',
+    borderTopWidth: 1,
+    borderTopColor: '#1E293B',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingHorizontal: 16,
+    zIndex: 40,
+  },
+  controlCircleBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  controlCircleBtnActive: {
+    borderColor: '#00E676',
+    backgroundColor: 'rgba(0, 230, 118, 0.12)',
+  },
+  shutterBtnOuter: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 3,
+    borderColor: '#00E676',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 230, 118, 0.12)',
+  },
+  shutterBtnInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#F8FAFC',
+  },
+  inspectorSidebar: {
+    width: 370,
+    maxWidth: 370,
+    backgroundColor: '#0B0E17',
+    borderLeftWidth: 1,
+    borderLeftColor: '#1E293B',
+  },
+  sidebarSectionTitle: {
+    color: '#F8FAFC',
+    fontSize: 13.5,
+    fontWeight: '700',
+    marginBottom: 12,
+  },
+  coordFormatTabs: {
+    flexDirection: 'row',
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    borderRadius: 8,
+    padding: 3,
+    marginBottom: 12,
+  },
+  formatTabBtn: {
+    flex: 1,
+    paddingVertical: 6,
+    alignItems: 'center',
+    borderRadius: 6,
+  },
+  formatTabBtnActive: {
+    backgroundColor: '#1E293B',
+  },
+  formatTabText: {
+    color: '#94A3B8',
+    fontSize: 11.5,
+    fontWeight: '700',
+  },
+  formatTabTextActive: {
+    color: '#00E676',
+  },
+  telemetryList: {
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    borderRadius: 10,
+    padding: 12,
+  },
+  telemetryItemRow: {
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(30, 41, 59, 0.6)',
+  },
+  telemetryKey: {
+    color: '#64748B',
+    fontSize: 11,
+    marginBottom: 2,
+  },
+  telemetryMono: {
+    color: '#00E676',
+    fontSize: 12,
+    fontWeight: '600',
+    fontFamily: 'JetBrains Mono, monospace',
+  },
+  telemetryMonoCyan: {
+    color: '#06B6D4',
+    fontSize: 12,
+    fontWeight: '600',
+    fontFamily: 'JetBrains Mono, monospace',
+  },
+  sidebarDivider: {
+    height: 1,
+    backgroundColor: '#1E293B',
+    marginVertical: 18,
+  },
+  sidebarField: {
+    marginBottom: 12,
+  },
+  sidebarLabel: {
+    color: '#94A3B8',
+    fontSize: 11.5,
+    fontWeight: '600',
+    marginBottom: 5,
+  },
+  categoryWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  catBtn: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1E293B',
+  },
+  catBtnActive: {
+    borderColor: '#00E676',
+    backgroundColor: 'rgba(0, 230, 118, 0.1)',
+  },
+  catBtnText: {
+    color: '#94A3B8',
+    fontSize: 11.5,
+    fontWeight: '600',
+  },
+  catBtnTextActive: {
+    color: '#00E676',
+  },
+});
+
+export default App;

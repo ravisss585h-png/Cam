@@ -1,0 +1,8 @@
+{
+  "name": "GPS Map Camera Pro",
+  "description": "GPS Map Camera app to capture photos with real-time GPS location, address, latitude longitude and map watermark.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}

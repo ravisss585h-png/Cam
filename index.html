@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <title>GPS Map Camera Pro</title>
+    <meta name="description" content="GPS Map Camera app to capture photos with real-time GPS location, address, latitude longitude and map watermark.">
+    <meta property="og:title" content="GPS Map Camera Pro">
+    <meta property="og:description" content="GPS Map Camera app to capture photos with real-time GPS location, address, latitude longitude and map watermark.">
+    <meta name="keywords" content="gps map camera, camera with gps location, gps photo camera, location camera app, geo tag camera, camera with location stamp, gps coordinates camera, map camera gps">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#07090E">
+    <style>
+        :root {
+            --bg-canvas: #07090E;
+            --bg-panel: #111827;
+            --bg-elevated: #1E293B;
+            --border-hairline: #1E293B;
+            --accent-primary: #00E676;
+            --accent-cyan: #06B6D4;
+            --accent-amber: #F59E0B;
+            --accent-danger: #F43F5E;
+            --text-primary: #F8FAFC;
+            --text-secondary: #94A3B8;
+            --text-muted: #64748B;
+            --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            outline: none;
+            margin: 0;
+            padding: 0;
+        }
+        html, body, #root {
+            background: var(--bg-canvas);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            user-select: none;
+            -webkit-font-smoothing: antialiased;
+        }
+        .font-mono-tabular {
+            font-family: var(--font-mono);
+            font-variant-numeric: tabular-nums;
+        }
+        input[type=range] {
+            accent-color: #00E676;
+            cursor: pointer;
+            height: 6px;
+            background: #1E293B;
+            border-radius: 3px;
+        }
+        input[type=text], input[type=number], select, textarea {
+            font-family: var(--font-sans);
+            background: #0B0E17;
+            color: #F8FAFC;
+            border: 1px solid #1E293B;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+            transition: border-color 0.15s ease;
+        }
+        input[type=text]:focus, input[type=number]:focus, select:focus, textarea:focus {
+            border-color: #00E676;
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #07090E;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #1E293B;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #334155;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
