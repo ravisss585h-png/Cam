@@ -6,15 +6,21 @@ import { DataOverlay } from './components/DataOverlay';
 import { StampDesignerView, CalibrationView } from './components/SettingsModal';
 import { SaveModal, SuccessModal } from './components/SaveModal';
 import { FieldLogView, PrivacyPolicyModal } from './components/GalleryModal';
+import { MapSurveyView } from './components/MapSurveyView';
 import {
   calculateHaversine,
+  calculateSolarPosition,
+  ClinometerState,
   CoordinateFormat,
   fetchReverseGeocode,
+  fetchWeatherTelemetry,
   formatDMS,
   formatPlusCode,
   formatUTM,
+  GeoWaypoint,
   getCardinalDirection,
   InspectionCategory,
+  ReviewStatus,
   StampConfig,
   SurveyProjectMeta,
   TelemetryState,
@@ -25,13 +31,14 @@ import {
   getAllGalleryPhotos,
   SavedPhoto,
   saveToGalleryDB,
+  updatePhotoReviewStatus,
 } from './services/galleryDb';
 import { captureGeotaggedPhoto } from './utils/watermark';
 
 const SHUTTER_WAV =
   'data:audio/wav;base64,UklGRiIAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
 
-type ActiveTab = 'viewfinder' | 'log' | 'designer' | 'calibration';
+type ActiveTab = 'viewfinder' | 'map' | 'log' | 'designer' | 'calibration';
 
 const CATEGORIES: InspectionCategory[] = [
   'Civil Survey',
@@ -98,6 +105,10 @@ export const App: React.FC = () => {
     showAltitudeAccuracy: true,
     showCompass: true,
     showProjectMeta: true,
+    showQR: true,
+    showWeather: true,
+    showClinometerSolar: true,
+    showSignatureLogo: true,
   });
 
   const [projectMeta, setProjectMeta] = useState<SurveyProjectMeta>({
@@ -106,10 +117,12 @@ export const App: React.FC = () => {
     category: 'Civil Survey',
     notes: 'Benchmark verification & site documentation',
     customHeader: 'GPS MAP CAMERA PRO · SURVEY TELEMETRY',
+    logoDataUrl: '',
+    signatureDataUrl: '',
   });
 
   // Telemetry State
-  const [telemetry, setTelemetry] = useState<TelemetryState>({
+  const [telemetry, setTelemetry] = useState<TelemetryState>(() => ({
     status: 'Calibrating GNSS...',
     lat: 28.613939,
     lon: 77.209021,
@@ -123,7 +136,36 @@ export const App: React.FC = () => {
     isAccuracyGood: true,
     address: 'Connaught Place, New Delhi, Delhi 110001, India',
     isManualLock: false,
+    weather: {
+      tempC: 26.4,
+      humidity: 48,
+      pressureHpa: 1012.8,
+      windKmh: 11.2,
+      condition: 'Clear Sky',
+    },
+    clinometer: {
+      pitchDeg: 1.5,
+      rollDeg: 0.0,
+      slopeGradePct: 2.6,
+    },
+    solar: calculateSolarPosition(28.613939, 77.209021),
+  }));
+
+  // GIS Parcel & Track Waypoints
+  const [waypoints, setWaypoints] = useState<GeoWaypoint[]>(() => {
+    const baseLat = 28.613939;
+    const baseLon = 77.209021;
+    const d = 0.00075;
+    return [
+      { id: 'wp-1', lat: Number((baseLat + d).toFixed(6)), lon: Number((baseLon - d).toFixed(6)), label: 'BM-01 (NW)', timestamp: Date.now() - 3000 },
+      { id: 'wp-2', lat: Number((baseLat + d).toFixed(6)), lon: Number((baseLon + d).toFixed(6)), label: 'BM-02 (NE)', timestamp: Date.now() - 2000 },
+      { id: 'wp-3', lat: Number((baseLat - d).toFixed(6)), lon: Number((baseLon + d).toFixed(6)), label: 'BM-03 (SE)', timestamp: Date.now() - 1000 },
+      { id: 'wp-4', lat: Number((baseLat - d).toFixed(6)), lon: Number((baseLon - d).toFixed(6)), label: 'BM-04 (SW)', timestamp: Date.now() },
+    ];
   });
+  const [isRecordingTrack, setIsRecordingTrack] = useState<boolean>(false);
+  const isRecordingTrackRef = useRef<boolean>(false);
+  isRecordingTrackRef.current = isRecordingTrack;
 
   const lastGeocodeRef = useRef<{
     lat: number;
@@ -154,7 +196,7 @@ export const App: React.FC = () => {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? '' : prev));
-    }, 3000);
+    }, 3200);
   }, []);
 
   const refreshGallery = useCallback(async () => {
@@ -236,13 +278,37 @@ export const App: React.FC = () => {
     [stopCamera]
   );
 
-  const triggerGeocode = useCallback(async (lt: number, ln: number) => {
-    const res = await fetchReverseGeocode(lt, ln);
+  const triggerGeocodeAndEnvironment = useCallback(async (lt: number, ln: number) => {
+    const [geoRes, weatherRes] = await Promise.all([
+      fetchReverseGeocode(lt, ln),
+      fetchWeatherTelemetry(lt, ln),
+    ]);
+    const solarRes = calculateSolarPosition(lt, ln);
     setTelemetry((prev) => ({
       ...prev,
-      address: res.address,
-      status: prev.isManualLock ? 'Station Benchmark Locked' : res.status,
+      address: geoRes.address,
+      status: prev.isManualLock ? 'Station Benchmark Locked' : geoRes.status,
+      weather: weatherRes,
+      solar: solarRes,
     }));
+  }, []);
+
+  // Device orientation listener for live Pitch & Roll Clinometer
+  useEffect(() => {
+    const handleOrientation = (e: DeviceOrientationEvent) => {
+      if (e.beta === null || e.gamma === null) return;
+      // Normalize beta (front-to-back tilt) around vertical holding angle
+      const pitchDeg = Number(Math.max(-45, Math.min(45, e.beta - 90)).toFixed(1));
+      const rollDeg = Number(Math.max(-30, Math.min(30, e.gamma)).toFixed(1));
+      const slopeGradePct = Number((Math.tan((Math.abs(pitchDeg) * Math.PI) / 180) * 100).toFixed(1));
+      setTelemetry((prev) => ({
+        ...prev,
+        clinometer: { pitchDeg, rollDeg, slopeGradePct },
+      }));
+    };
+
+    window.addEventListener('deviceorientation', handleOrientation);
+    return () => window.removeEventListener('deviceorientation', handleOrientation);
   }, []);
 
   const startGPS = useCallback(() => {
@@ -254,6 +320,9 @@ export const App: React.FC = () => {
       }
       watchIdRef.current = null;
     }
+
+    // Fetch initial weather & solar for default coordinates
+    triggerGeocodeAndEnvironment(telemetry.lat, telemetry.lon);
 
     if (!navigator.geolocation) {
       return;
@@ -291,7 +360,20 @@ export const App: React.FC = () => {
             last.lon = ln;
             last.time = now;
             last.accuracy = acc;
-            triggerGeocode(lt, ln);
+            triggerGeocodeAndEnvironment(lt, ln);
+          }
+
+          if (isRecordingTrackRef.current && distMoved > 3) {
+            setWaypoints((wpts) => [
+              ...wpts,
+              {
+                id: `trk-${Date.now()}`,
+                lat: Number(lt.toFixed(6)),
+                lon: Number(ln.toFixed(6)),
+                label: `TRK-${wpts.length + 1}`,
+                timestamp: Date.now(),
+              },
+            ]);
           }
 
           return {
@@ -306,6 +388,7 @@ export const App: React.FC = () => {
             headingDeg: hdgDeg,
             accuracy: acc,
             isAccuracyGood: isGood,
+            solar: calculateSolarPosition(lt, ln),
             status: acc <= 15 ? 'RTK / Location Locked' : 'GNSS Tracking Active',
           };
         });
@@ -315,7 +398,7 @@ export const App: React.FC = () => {
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
-  }, [accuracyLimit, distanceThrottle, triggerGeocode]);
+  }, [accuracyLimit, distanceThrottle, triggerGeocodeAndEnvironment]);
 
   useEffect(() => {
     if (!showSplash && isReady) {
@@ -348,10 +431,18 @@ export const App: React.FC = () => {
       lat,
       lon,
       isManualLock: lock,
+      solar: calculateSolarPosition(lat, lon),
       status: lock ? 'Station Benchmark Locked' : 'GNSS Tracking Active',
     }));
-    triggerGeocode(lat, lon);
+    triggerGeocodeAndEnvironment(lat, lon);
     showToast(lock ? 'Coordinates locked to benchmark station.' : 'Live GNSS tracking resumed.');
+  };
+
+  const handleChangeClinometer = (nextClinometer: ClinometerState) => {
+    setTelemetry((prev) => ({
+      ...prev,
+      clinometer: nextClinometer,
+    }));
   };
 
   const handleSwitchCamera = () => {
@@ -409,11 +500,16 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleConfirmSave = async () => {
-    if (!capturedFullDataUrl) return;
+  const handleConfirmSave = async (annotatedDataUrl?: string) => {
+    const targetDataUrl = annotatedDataUrl || capturedFullDataUrl;
+    if (!targetDataUrl) return;
     setIsSaving(true);
     try {
-      const base64Data = capturedFullDataUrl.replace(/^data:image\/jpeg;base64,/, '');
+      const base64Data = targetDataUrl.replace(/^data:image\/jpeg;base64,/, '');
+      const w = telemetry.weather;
+      const cl = telemetry.clinometer;
+      const sol = telemetry.solar;
+
       await saveToGalleryDB(base64Data, {
         projectId: projectMeta.projectId,
         surveyor: projectMeta.surveyor,
@@ -427,13 +523,19 @@ export const App: React.FC = () => {
         accuracy: telemetry.accuracy,
         heading: telemetry.heading,
         address: telemetry.address,
+        weatherSummary: `${w.tempC}°C · RH ${w.humidity}% · ${w.pressureHpa} hPa · ${w.condition}`,
+        clinometerSummary: `Pitch ${cl.pitchDeg >= 0 ? '+' : ''}${cl.pitchDeg.toFixed(1)}° · Roll ${
+          cl.rollDeg >= 0 ? '+' : ''
+        }${cl.rollDeg.toFixed(1)}° · Slope ${cl.slopeGradePct.toFixed(1)}%`,
+        solarSummary: `Sun EL ${sol.elevationDeg}° · AZ ${sol.azimuthDeg}°`,
+        reviewStatus: 'Pending Review',
       });
       await refreshGallery();
-      setLastSavedDataUrl(capturedFullDataUrl);
+      setLastSavedDataUrl(targetDataUrl);
 
       const fileName = `${projectMeta.projectId || 'GPS_PRO'}_${Date.now()}.jpg`;
       const a = document.createElement('a');
-      a.href = capturedFullDataUrl;
+      a.href = targetDataUrl;
       a.download = fileName;
       document.body.appendChild(a);
       a.click();
@@ -455,6 +557,12 @@ export const App: React.FC = () => {
     await deleteGalleryPhoto(id);
     await refreshGallery();
     showToast('Field record deleted.');
+  };
+
+  const handleUpdateReviewStatus = async (id: number, status: ReviewStatus, reviewer: string) => {
+    await updatePhotoReviewStatus(id, status, reviewer);
+    await refreshGallery();
+    showToast(`Record marked as ${status}.`);
   };
 
   const handleSharePhoto = async (base64OrDataUrl?: string) => {
@@ -533,7 +641,7 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Top Bar Contract: 1 Row, 3 Zones (Brand Wordmark — 4 Nav Links — 1 Primary Action) */}
+      {/* Top Bar Contract: 1 Row, 3 Zones (Brand Wordmark — 5 Nav Links — 1 Primary Action) */}
       <View style={styles.topBar}>
         <TouchableOpacity onPress={() => setActiveTab('viewfinder')}>
           <Text style={styles.brandWordmark} numberOfLines={1}>
@@ -545,6 +653,7 @@ export const App: React.FC = () => {
           {(
             [
               { id: 'viewfinder', label: 'Viewfinder' },
+              { id: 'map', label: 'Map & Parcel' },
               { id: 'log', label: `Field Log (${galleryPhotos.length})` },
               { id: 'designer', label: 'Stamp Designer' },
               { id: 'calibration', label: 'Calibration' },
@@ -594,7 +703,7 @@ export const App: React.FC = () => {
         <View style={styles.viewfinderSplitLayout}>
           {/* Left / Main Stage: Optical Camera Viewfinder */}
           <View style={styles.cameraStage}>
-            {/* Optical Toolbar Overlay (Zoom, Aspect Ratio, Grid, Status) */}
+            {/* Optical Toolbar Overlay (Status, Clinometer Slope, Zoom, Aspect Ratio) */}
             <View style={styles.opticalTopHud}>
               <Text
                 style={[
@@ -604,7 +713,8 @@ export const App: React.FC = () => {
               >
                 {telemetry.isAccuracyGood ? '● ' : '▲ '}
                 {telemetry.status} · ±
-                {telemetry.accuracy >= 999 ? '--' : Math.round(telemetry.accuracy)}m
+                {telemetry.accuracy >= 999 ? '--' : Math.round(telemetry.accuracy)}m ·{' '}
+                {telemetry.weather.tempC}°C · SLOPE {telemetry.clinometer.slopeGradePct.toFixed(1)}%
               </Text>
 
               <View style={styles.opticalControlsGroup}>
@@ -689,7 +799,7 @@ export const App: React.FC = () => {
                     </Text>
                     <Text style={styles.simulatedSub}>
                       {projectMeta.projectId} · {projectMeta.category} · Tap anywhere to focus or
-                      press shutter to record geotagged report
+                      press shutter to open CAD Redline & Stamp verification
                     </Text>
                   </View>
                 </View>
@@ -748,44 +858,45 @@ export const App: React.FC = () => {
                 </div>
               )}
 
-              {/* Artificial Horizon & Center Crosshair Reticle */}
+              {/* Artificial Horizon & Clinometer Pitch/Roll Reticle */}
               {showHorizon && (
                 <div
                   style={{
                     position: 'absolute',
                     left: '50%',
-                    top: '42%',
-                    transform: 'translate(-50%, -50%)',
-                    width: 140,
-                    height: 140,
+                    top: '40%',
+                    transform: `translate(-50%, -50%) rotate(${telemetry.clinometer.rollDeg}deg)`,
+                    width: 150,
+                    height: 150,
                     pointerEvents: 'none',
                     zIndex: 6,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
+                    transition: 'transform 0.15s ease-out',
                   }}
                 >
                   <div
                     style={{
-                      width: 48,
-                      height: 48,
+                      width: 52,
+                      height: 52,
                       borderRadius: '50%',
-                      border: '1px solid rgba(0, 230, 118, 0.35)',
+                      border: '1px solid rgba(0, 230, 118, 0.4)',
                     }}
                   />
                   <div
                     style={{
                       position: 'absolute',
-                      width: 110,
-                      height: 1,
-                      backgroundColor: 'rgba(0, 230, 118, 0.45)',
+                      width: 120,
+                      height: 1.5,
+                      backgroundColor: 'rgba(0, 230, 118, 0.55)',
                     }}
                   />
                   <div
                     style={{
                       position: 'absolute',
                       width: 1,
-                      height: 70,
+                      height: 72,
                       backgroundColor: 'rgba(0, 230, 118, 0.45)',
                     }}
                   />
@@ -869,11 +980,11 @@ export const App: React.FC = () => {
             </View>
           </View>
 
-          {/* Right Desktop Inspector Column: Live Geodetic Telemetry & Project Tagging */}
+          {/* Right Desktop Inspector Column: Live Geodetic, Environmental & Project Tagging */}
           {isDesktop && (
             <ScrollView style={styles.inspectorSidebar} contentContainerStyle={{ padding: 20 }}>
               {/* Section 1: Geodetic Datum Telemetry */}
-              <Text style={styles.sidebarSectionTitle}>01. GNSS Coordinate Telemetry</Text>
+              <Text style={styles.sidebarSectionTitle}>01. GNSS & Environmental Telemetry</Text>
               <View style={styles.coordFormatTabs}>
                 {COORD_FORMATS.map((fmt) => {
                   const active = stampConfig.coordFormat === fmt;
@@ -911,16 +1022,26 @@ export const App: React.FC = () => {
                   </Text>
                 </View>
                 <View style={styles.telemetryItemRow}>
-                  <Text style={styles.telemetryKey}>Plus Code · Azimuth</Text>
+                  <Text style={styles.telemetryKey}>Plus Code · Azimuth · Elevation</Text>
                   <Text style={styles.telemetryMono}>
                     {formatPlusCode(telemetry.lat, telemetry.lon)} · {telemetry.heading} (
-                    {getCardinalDirection(telemetry.headingDeg)})
+                    {getCardinalDirection(telemetry.headingDeg)}) · {telemetry.alt}
                   </Text>
                 </View>
                 <View style={styles.telemetryItemRow}>
-                  <Text style={styles.telemetryKey}>Elevation · Horizontal Acc</Text>
-                  <Text style={styles.telemetryMono}>
-                    {telemetry.alt} · ±{Math.round(telemetry.accuracy)}m
+                  <Text style={styles.telemetryKey}>Weather & Barometric Pressure</Text>
+                  <Text style={styles.telemetryMonoAmber}>
+                    {telemetry.weather.tempC}°C · RH {telemetry.weather.humidity}% ·{' '}
+                    {telemetry.weather.pressureHpa} hPa · {telemetry.weather.windKmh} km/h
+                  </Text>
+                </View>
+                <View style={styles.telemetryItemRow}>
+                  <Text style={styles.telemetryKey}>Clinometer Slope · Solar Position</Text>
+                  <Text style={styles.telemetryMonoCyan}>
+                    Grade {telemetry.clinometer.slopeGradePct.toFixed(1)}% (P{' '}
+                    {telemetry.clinometer.pitchDeg >= 0 ? '+' : ''}
+                    {telemetry.clinometer.pitchDeg.toFixed(1)}°) · Sun EL{' '}
+                    {telemetry.solar.elevationDeg}° AZ {telemetry.solar.azimuthDeg}°
                   </Text>
                 </View>
               </View>
@@ -1012,11 +1133,38 @@ export const App: React.FC = () => {
         </View>
       )}
 
+      {activeTab === 'map' && (
+        <MapSurveyView
+          telemetry={telemetry}
+          projectMeta={projectMeta}
+          photos={galleryPhotos}
+          waypoints={waypoints}
+          isRecordingTrack={isRecordingTrack}
+          onAddWaypoint={(wp) => setWaypoints((prev) => [...prev, wp])}
+          onRemoveWaypoint={(id) => setWaypoints((prev) => prev.filter((w) => w.id !== id))}
+          onClearWaypoints={() => setWaypoints([])}
+          onToggleTrackRecording={() => {
+            setIsRecordingTrack((prev) => {
+              const next = !prev;
+              showToast(
+                next
+                  ? 'GPS Perimeter Track Recording started.'
+                  : 'GPS Track Recording paused.'
+              );
+              return next;
+            });
+          }}
+        />
+      )}
+
       {activeTab === 'log' && (
         <FieldLogView
           photos={galleryPhotos}
+          projectMeta={projectMeta}
           onDeletePhoto={handleDeleteGalleryPhoto}
           onSharePhoto={(b64) => handleSharePhoto(b64)}
+          onUpdateReviewStatus={handleUpdateReviewStatus}
+          onRefreshPhotos={refreshGallery}
           onBackToCamera={() => setActiveTab('viewfinder')}
         />
       )}
@@ -1046,12 +1194,13 @@ export const App: React.FC = () => {
           }}
           onToggleGrid={setShowGrid}
           onToggleHorizon={setShowHorizon}
+          onChangeClinometer={handleChangeClinometer}
           onManualCoordinateOverride={handleManualCoordinateOverride}
           onOpenPrivacyPolicy={() => setPrivacyVisible(true)}
         />
       )}
 
-      {/* Save Field Report Verification Modal */}
+      {/* Save Field Report & CAD Redline Markup Modal */}
       <SaveModal
         visible={saveModalVisible}
         previewUri={capturedPreviewUrl}
@@ -1111,14 +1260,14 @@ const styles = StyleSheet.create({
   navLinksRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 20,
+    gap: 18,
   },
   navLinkBtn: {
     paddingVertical: 6,
   },
   navLinkText: {
     color: '#94A3B8',
-    fontSize: 13.5,
+    fontSize: 13,
     fontWeight: '600',
   },
   navLinkTextActive: {
@@ -1176,10 +1325,10 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   telemetryStatusLabel: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: '700',
     fontFamily: 'JetBrains Mono, monospace',
-    backgroundColor: 'rgba(7, 9, 14, 0.78)',
+    backgroundColor: 'rgba(7, 9, 14, 0.82)',
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 6,
@@ -1231,7 +1380,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
-    maxWidth: 420,
+    maxWidth: 440,
   },
   simulatedHeading: {
     color: '#F8FAFC',
@@ -1288,8 +1437,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8FAFC',
   },
   inspectorSidebar: {
-    width: 370,
-    maxWidth: 370,
+    width: 380,
+    maxWidth: 380,
     backgroundColor: '#0B0E17',
     borderLeftWidth: 1,
     borderLeftColor: '#1E293B',
@@ -1345,13 +1494,19 @@ const styles = StyleSheet.create({
   },
   telemetryMono: {
     color: '#00E676',
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: '600',
     fontFamily: 'JetBrains Mono, monospace',
   },
   telemetryMonoCyan: {
     color: '#06B6D4',
-    fontSize: 12,
+    fontSize: 11.5,
+    fontWeight: '600',
+    fontFamily: 'JetBrains Mono, monospace',
+  },
+  telemetryMonoAmber: {
+    color: '#F59E0B',
+    fontSize: 11.5,
     fontWeight: '600',
     fontFamily: 'JetBrains Mono, monospace',
   },

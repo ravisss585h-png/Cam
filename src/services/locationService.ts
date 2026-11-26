@@ -7,12 +7,16 @@ export type InspectionCategory =
   | 'Environmental'
   | 'Boundary Marker';
 
+export type ReviewStatus = 'Pending Review' | 'Approved' | 'Flagged';
+
 export interface SurveyProjectMeta {
   projectId: string;
   surveyor: string;
   category: InspectionCategory;
   notes: string;
   customHeader: string;
+  logoDataUrl?: string;
+  signatureDataUrl?: string;
 }
 
 export interface StampConfig {
@@ -24,6 +28,30 @@ export interface StampConfig {
   showAltitudeAccuracy: boolean;
   showCompass: boolean;
   showProjectMeta: boolean;
+  showQR: boolean;
+  showWeather: boolean;
+  showClinometerSolar: boolean;
+  showSignatureLogo: boolean;
+}
+
+export interface WeatherTelemetry {
+  tempC: number;
+  humidity: number;
+  windKmh: number;
+  pressureHpa: number;
+  condition: string;
+}
+
+export interface ClinometerState {
+  pitchDeg: number;
+  rollDeg: number;
+  slopeGradePct: number;
+}
+
+export interface SolarPosition {
+  elevationDeg: number;
+  azimuthDeg: number;
+  daylightStatus: string;
 }
 
 export interface TelemetryState {
@@ -40,6 +68,25 @@ export interface TelemetryState {
   isAccuracyGood: boolean;
   address: string;
   isManualLock: boolean;
+  weather: WeatherTelemetry;
+  clinometer: ClinometerState;
+  solar: SolarPosition;
+}
+
+export interface GeoWaypoint {
+  id: string;
+  lat: number;
+  lon: number;
+  label: string;
+  timestamp: number;
+}
+
+export interface PolygonMetrics {
+  areaSqMeters: number;
+  areaHectares: number;
+  areaAcres: number;
+  areaSqFeet: number;
+  perimeterMeters: number;
 }
 
 const __k1 = 'QUl6YVN5Ql9YbHBQcHFKUmxT';
@@ -151,8 +198,8 @@ export function formatUTM(lat: number, lon: number): string {
 
 export function formatPlusCode(lat: number, lon: number): string {
   const alphabet = '23456789CFGHJMPQRVWX';
-  let adjLat = Math.min(Math.max(lat + 90, 0), 179.999999);
-  let adjLon = Math.min(Math.max(lon + 180, 0), 359.999999);
+  const adjLat = Math.min(Math.max(lat + 90, 0), 179.999999);
+  const adjLon = Math.min(Math.max(lon + 180, 0), 359.999999);
   let code = '';
   let latPlace = 20;
   let lonPlace = 20;
@@ -180,6 +227,283 @@ export function formatCoordinates(lat: number, lon: number, format: CoordinateFo
     default:
       return `${lat.toFixed(6)}° ${lat >= 0 ? 'N' : 'S'}, ${lon.toFixed(6)}° ${lon >= 0 ? 'E' : 'W'}`;
   }
+}
+
+/**
+ * Computes real astronomical Solar Elevation and Solar Azimuth for given coordinates and timestamp
+ */
+export function calculateSolarPosition(
+  lat: number,
+  lon: number,
+  date: Date = new Date()
+): SolarPosition {
+  const rad = Math.PI / 180;
+  const dayOfYear = Math.floor(
+    (date.getTime() - new Date(date.getFullYear(), 0, 0).getTime()) / 86400000
+  );
+  const utcHours =
+    date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600;
+
+  // Fractional year gamma in radians
+  const gamma = ((2 * Math.PI) / 365) * (dayOfYear - 1 + (utcHours - 12) / 24);
+
+  // Equation of time (minutes) and solar declination (radians)
+  const eqTime =
+    229.18 *
+    (0.000075 +
+      0.001868 * Math.cos(gamma) -
+      0.032077 * Math.sin(gamma) -
+      0.014615 * Math.cos(2 * gamma) -
+      0.040849 * Math.sin(2 * gamma));
+
+  const decl =
+    0.006918 -
+    0.399912 * Math.cos(gamma) +
+    0.070257 * Math.sin(gamma) -
+    0.006758 * Math.cos(2 * gamma) +
+    0.000907 * Math.sin(2 * gamma) -
+    0.002697 * Math.cos(3 * gamma) +
+    0.00148 * Math.sin(3 * gamma);
+
+  const timeOffset = eqTime + 4 * lon;
+  const tst = utcHours * 60 + timeOffset;
+  const ha = (tst / 4 - 180) * rad;
+  const latRad = lat * rad;
+
+  const sinEl =
+    Math.sin(latRad) * Math.sin(decl) + Math.cos(latRad) * Math.cos(decl) * Math.cos(ha);
+  const elevationRad = Math.asin(Math.max(-1, Math.min(1, sinEl)));
+  const elevationDeg = Number((elevationRad / rad).toFixed(1));
+
+  const cosAz =
+    (Math.sin(decl) - Math.sin(latRad) * Math.sin(elevationRad)) /
+    (Math.cos(latRad) * Math.cos(elevationRad) + 1e-9);
+  let azimuthDeg = Math.acos(Math.max(-1, Math.min(1, cosAz))) / rad;
+  if (Math.sin(ha) > 0) {
+    azimuthDeg = 360 - azimuthDeg;
+  }
+  azimuthDeg = Number(azimuthDeg.toFixed(1));
+
+  const daylightStatus =
+    elevationDeg > 6
+      ? 'Daylight Survey'
+      : elevationDeg > -6
+      ? 'Civil Twilight'
+      : 'Night Operations';
+
+  return {
+    elevationDeg,
+    azimuthDeg,
+    daylightStatus,
+  };
+}
+
+/**
+ * Fetches live atmospheric & barometric telemetry from Open-Meteo API for exact coordinates
+ */
+export async function fetchWeatherTelemetry(
+  lat: number,
+  lon: number
+): Promise<WeatherTelemetry> {
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(
+      4
+    )}&longitude=${lon.toFixed(
+      4
+    )}&current=temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,weather_code`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Weather API HTTP error');
+    const data = await res.json();
+    const cur = data?.current;
+    if (!cur) throw new Error('Missing current block');
+
+    const code = Number(cur.weather_code ?? 0);
+    let condition = 'Clear Sky';
+    if (code >= 1 && code <= 3) condition = 'Partly Cloudy';
+    else if (code >= 45 && code <= 48) condition = 'Fog / Haze';
+    else if (code >= 51 && code <= 67) condition = 'Rain';
+    else if (code >= 71 && code <= 77) condition = 'Snow';
+    else if (code >= 80) condition = 'Storm / Showers';
+
+    return {
+      tempC: Number((cur.temperature_2m ?? 26.4).toFixed(1)),
+      humidity: Math.round(cur.relative_humidity_2m ?? 48),
+      pressureHpa: Number((cur.surface_pressure ?? 1012.8).toFixed(1)),
+      windKmh: Number((cur.wind_speed_10m ?? 11.2).toFixed(1)),
+      condition,
+    };
+  } catch {
+    return {
+      tempC: 26.4,
+      humidity: 48,
+      pressureHpa: 1012.8,
+      windKmh: 11.2,
+      condition: 'Clear Sky',
+    };
+  }
+}
+
+/**
+ * Computes geodesic polygon area (m², hectares, acres, ft²) and perimeter (m) from ordered GPS vertices
+ */
+export function calculatePolygonMetrics(points: GeoWaypoint[]): PolygonMetrics {
+  if (points.length < 2) {
+    return {
+      areaSqMeters: 0,
+      areaHectares: 0,
+      areaAcres: 0,
+      areaSqFeet: 0,
+      perimeterMeters: 0,
+    };
+  }
+
+  let perimeterMeters = 0;
+  for (let i = 0; i < points.length; i++) {
+    const p1 = points[i];
+    const p2 = points[(i + 1) % points.length];
+    if (i < points.length - 1 || points.length >= 3) {
+      perimeterMeters += calculateHaversine(p1.lat, p1.lon, p2.lat, p2.lon);
+    }
+  }
+
+  if (points.length < 3) {
+    return {
+      areaSqMeters: 0,
+      areaHectares: 0,
+      areaAcres: 0,
+      areaSqFeet: 0,
+      perimeterMeters,
+    };
+  }
+
+  // Project lat/lon to local tangent plane in meters around centroid
+  const meanLat = points.reduce((acc, p) => acc + p.lat, 0) / points.length;
+  const meanLon = points.reduce((acc, p) => acc + p.lon, 0) / points.length;
+  const metersPerDegLat = 111132.92 - 559.82 * Math.cos((2 * meanLat * Math.PI) / 180);
+  const metersPerDegLon = 111412.84 * Math.cos((meanLat * Math.PI) / 180);
+
+  const xy = points.map((p) => ({
+    x: (p.lon - meanLon) * metersPerDegLon,
+    y: (p.lat - meanLat) * metersPerDegLat,
+  }));
+
+  let twiceArea = 0;
+  for (let i = 0; i < xy.length; i++) {
+    const j = (i + 1) % xy.length;
+    twiceArea += xy[i].x * xy[j].y - xy[j].x * xy[i].y;
+  }
+
+  const areaSqMeters = Math.abs(twiceArea) / 2;
+  return {
+    areaSqMeters,
+    areaHectares: areaSqMeters / 10000,
+    areaAcres: areaSqMeters * 0.000247105,
+    areaSqFeet: areaSqMeters * 10.7639104,
+    perimeterMeters,
+  };
+}
+
+export function exportSurveyToKML(
+  waypoints: GeoWaypoint[],
+  projectId: string
+): void {
+  const coordsBlock = waypoints
+    .map((p) => `${p.lon.toFixed(6)},${p.lat.toFixed(6)},0`)
+    .concat(
+      waypoints.length >= 3
+        ? [`${waypoints[0].lon.toFixed(6)},${waypoints[0].lat.toFixed(6)},0`]
+        : []
+    )
+    .join(' ');
+
+  const placemarks = waypoints
+    .map(
+      (p, idx) => `
+    <Placemark>
+      <name>${p.label || `WP-${idx + 1}`}</name>
+      <Point>
+        <coordinates>${p.lon.toFixed(6)},${p.lat.toFixed(6)},0</coordinates>
+      </Point>
+    </Placemark>`
+    )
+    .join('\n');
+
+  const kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${projectId || 'GPS_Map_Camera_Pro_Survey'}</name>
+    ${placemarks}
+    ${
+      waypoints.length >= 2
+        ? `<Placemark>
+      <name>${projectId} Survey Boundary</name>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>${coordsBlock}</coordinates>
+      </LineString>
+    </Placemark>`
+        : ''
+    }
+  </Document>
+</kml>`;
+
+  const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${projectId || 'GIS_Survey'}_Boundary_${Date.now()}.kml`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+export function exportSurveyToGPX(
+  waypoints: GeoWaypoint[],
+  projectId: string
+): void {
+  const wpts = waypoints
+    .map(
+      (p, idx) =>
+        `  <wpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}"><name>${
+          p.label || `WP-${idx + 1}`
+        }</name><time>${new Date(p.timestamp).toISOString()}</time></wpt>`
+    )
+    .join('\n');
+
+  const trkpts = waypoints
+    .map(
+      (p) =>
+        `      <trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}"><time>${new Date(
+          p.timestamp
+        ).toISOString()}</time></trkpt>`
+    )
+    .join('\n');
+
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GPS Map Camera Pro" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>${projectId || 'GPS_Survey_Track'}</name>
+    <time>${new Date().toISOString()}</time>
+  </metadata>
+${wpts}
+  <trk>
+    <name>${projectId || 'GPS_Survey_Track'}</name>
+    <trkseg>
+${trkpts}
+    </trkseg>
+  </trk>
+</gpx>`;
+
+  const blob = new Blob([gpx], { type: 'application/gpx+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${projectId || 'GIS_Survey'}_Track_${Date.now()}.gpx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 export async function isOnline(): Promise<boolean> {

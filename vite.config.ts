@@ -9,6 +9,10 @@ export default defineConfig({
     },
     extensions: ['.web.tsx', '.web.ts', '.web.jsx', '.web.js', '.tsx', '.ts', '.jsx', '.js'],
   },
+  build: {
+    outDir: 'www',
+    emptyOutDir: true,
+  },
   server: {
     host: '0.0.0.0',
     port: 3000,

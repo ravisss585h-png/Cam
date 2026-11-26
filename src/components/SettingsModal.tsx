@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, Switch, ScrollView, StyleSheet } from 'react-native';
 import {
   calculateBearing,
   calculateHaversine,
+  ClinometerState,
   CoordinateFormat,
   formatDMS,
   formatPlusCode,
@@ -23,7 +24,7 @@ const TEMPLATES: Array<{
   {
     id: 'engineering',
     title: '01. Engineering & Civil Survey (Full GIS Block)',
-    desc: 'Includes static map/radar box, DD & UTM coordinates, elevation, accuracy, azimuth, project ID, and surveyor remarks.',
+    desc: 'Includes static map/radar box, DD & UTM coordinates, elevation, accuracy, weather, clinometer slope, QR code, and surveyor signature.',
   },
   {
     id: 'compact',
@@ -58,12 +59,73 @@ export const StampDesignerView: React.FC<StampDesignerViewProps> = ({
   onChangeStampConfig,
   onChangeProjectMeta,
 }) => {
+  const sigCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isDrawingSig, setIsDrawingSig] = useState<boolean>(false);
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        onChangeProjectMeta({ ...projectMeta, logoDataUrl: reader.result });
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSigMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = sigCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const rect = canvas.getBoundingClientRect();
+    setIsDrawingSig(true);
+    ctx.strokeStyle = '#00E676';
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+  };
+
+  const handleSigMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDrawingSig) return;
+    const canvas = sigCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const rect = canvas.getBoundingClientRect();
+    ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+    ctx.stroke();
+  };
+
+  const handleSigMouseUp = () => {
+    if (!isDrawingSig) return;
+    setIsDrawingSig(false);
+    const canvas = sigCanvasRef.current;
+    if (canvas) {
+      onChangeProjectMeta({
+        ...projectMeta,
+        signatureDataUrl: canvas.toDataURL('image/png'),
+      });
+    }
+  };
+
+  const handleClearSignature = () => {
+    const canvas = sigCanvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    onChangeProjectMeta({ ...projectMeta, signatureDataUrl: '' });
+  };
+
   return (
     <ScrollView style={styles.workspace} contentContainerStyle={{ paddingBottom: 40 }}>
       <View style={styles.headerBlock}>
-        <Text style={styles.pageTitle}>01. Watermark Stamp & Survey Metadata Designer</Text>
+        <Text style={styles.pageTitle}>01. Watermark Stamp, QR & Brand Authentication Designer</Text>
         <Text style={styles.pageDesc}>
-          Configure the geospatial telemetry overlay and project documentation attributes stamped onto every field report.
+          Configure the geospatial telemetry overlay, scannable QR verification code, environmental sensors, agency logo, and digital sign-off signature.
         </Text>
       </View>
 
@@ -129,6 +191,16 @@ export const StampDesignerView: React.FC<StampDesignerViewProps> = ({
           </View>
 
           <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Stamp Geo-Verification QR Matrix</Text>
+            <Switch
+              value={stampConfig.showQR}
+              onValueChange={(val) => onChangeStampConfig({ ...stampConfig, showQR: val })}
+              trackColor={{ false: '#1E293B', true: '#00E676' }}
+              thumbColor="#F8FAFC"
+            />
+          </View>
+
+          <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>Stamp Secondary UTM & DMS Line</Text>
             <Switch
               value={stampConfig.showUTM}
@@ -161,11 +233,33 @@ export const StampDesignerView: React.FC<StampDesignerViewProps> = ({
           </View>
 
           <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>Stamp Project & Surveyor Attributes</Text>
+            <Text style={styles.switchLabel}>Stamp Atmospheric Weather & Barometer (hPa)</Text>
             <Switch
-              value={stampConfig.showProjectMeta}
+              value={stampConfig.showWeather}
+              onValueChange={(val) => onChangeStampConfig({ ...stampConfig, showWeather: val })}
+              trackColor={{ false: '#1E293B', true: '#00E676' }}
+              thumbColor="#F8FAFC"
+            />
+          </View>
+
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Stamp Clinometer Slope (%) & Solar Angle</Text>
+            <Switch
+              value={stampConfig.showClinometerSolar}
               onValueChange={(val) =>
-                onChangeStampConfig({ ...stampConfig, showProjectMeta: val })
+                onChangeStampConfig({ ...stampConfig, showClinometerSolar: val })
+              }
+              trackColor={{ false: '#1E293B', true: '#00E676' }}
+              thumbColor="#F8FAFC"
+            />
+          </View>
+
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Stamp Agency Logo & Digital Signature</Text>
+            <Switch
+              value={stampConfig.showSignatureLogo}
+              onValueChange={(val) =>
+                onChangeStampConfig({ ...stampConfig, showSignatureLogo: val })
               }
               trackColor={{ false: '#1E293B', true: '#00E676' }}
               thumbColor="#F8FAFC"
@@ -173,7 +267,7 @@ export const StampDesignerView: React.FC<StampDesignerViewProps> = ({
           </View>
         </View>
 
-        {/* Right Column: Active Project & Surveyor Metadata */}
+        {/* Right Column: Project Metadata, Logo Upload & Digital Signature Pad */}
         <View style={styles.panel}>
           <Text style={styles.panelTitle}>Active Survey Project Metadata</Text>
 
@@ -235,11 +329,71 @@ export const StampDesignerView: React.FC<StampDesignerViewProps> = ({
           <View style={styles.fieldGroup}>
             <Text style={styles.fieldLabel}>Field Remarks / Chainage Note</Text>
             <textarea
-              rows={3}
+              rows={2}
               value={projectMeta.notes}
               onChange={(e) => onChangeProjectMeta({ ...projectMeta, notes: e.target.value })}
-              placeholder="e.g., Benchmark Pillar BM-04 verified, clear sky conditions..."
+              placeholder="e.g., Benchmark Pillar BM-04 verified..."
               style={{ width: '100%', resize: 'vertical' }}
+            />
+          </View>
+
+          <View style={styles.divider} />
+
+          <Text style={styles.panelTitle}>Agency Logo & Digital Sign-Off</Text>
+
+          <View style={styles.fieldGroup}>
+            <Text style={styles.fieldLabel}>Upload Organization Logo (PNG/JPG)</Text>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleLogoUpload}
+              style={{ color: '#94A3B8', fontSize: 12 }}
+            />
+            {projectMeta.logoDataUrl ? (
+              <TouchableOpacity
+                onPress={() => onChangeProjectMeta({ ...projectMeta, logoDataUrl: '' })}
+                style={{ marginTop: 6 }}
+              >
+                <Text style={{ color: '#F43F5E', fontSize: 12, fontWeight: '600' }}>
+                  Remove Uploaded Logo
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: 6,
+              }}
+            >
+              <Text style={styles.fieldLabel}>Surveyor Digital Signature Pad (Draw below)</Text>
+              <TouchableOpacity onPress={handleClearSignature}>
+                <Text style={{ color: '#F43F5E', fontSize: 11.5, fontWeight: '600' }}>
+                  Clear Signature
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <canvas
+              ref={sigCanvasRef}
+              width={320}
+              height={90}
+              onMouseDown={handleSigMouseDown}
+              onMouseMove={handleSigMouseMove}
+              onMouseUp={handleSigMouseUp}
+              onMouseLeave={handleSigMouseUp}
+              style={{
+                width: '100%',
+                height: 90,
+                backgroundColor: '#0B0E17',
+                border: '1px solid #1E293B',
+                borderRadius: 8,
+                cursor: 'crosshair',
+                display: 'block',
+              }}
             />
           </View>
         </View>
@@ -260,6 +414,7 @@ interface CalibrationViewProps {
   onToggleHighRes: (val: boolean) => void;
   onToggleGrid: (val: boolean) => void;
   onToggleHorizon: (val: boolean) => void;
+  onChangeClinometer: (next: ClinometerState) => void;
   onManualCoordinateOverride: (lat: number, lon: number, lock: boolean) => void;
   onOpenPrivacyPolicy: () => void;
 }
@@ -276,6 +431,7 @@ export const CalibrationView: React.FC<CalibrationViewProps> = ({
   onToggleHighRes,
   onToggleGrid,
   onToggleHorizon,
+  onChangeClinometer,
   onManualCoordinateOverride,
   onOpenPrivacyPolicy,
 }) => {
@@ -299,17 +455,35 @@ export const CalibrationView: React.FC<CalibrationViewProps> = ({
     parsedTargetLon
   );
 
+  const handlePitchChange = (pitchDeg: number) => {
+    const slopeGradePct = Math.tan((Math.abs(pitchDeg) * Math.PI) / 180) * 100;
+    onChangeClinometer({
+      ...telemetry.clinometer,
+      pitchDeg,
+      slopeGradePct: Number(slopeGradePct.toFixed(1)),
+    });
+  };
+
+  const handleRollChange = (rollDeg: number) => {
+    onChangeClinometer({
+      ...telemetry.clinometer,
+      rollDeg,
+    });
+  };
+
   return (
     <ScrollView style={styles.workspace} contentContainerStyle={{ paddingBottom: 40 }}>
       <View style={styles.headerBlock}>
-        <Text style={styles.pageTitle}>01. Sensor Calibration & Geodetic Benchmark Computer</Text>
+        <Text style={styles.pageTitle}>
+          01. Sensor Calibration, Clinometer & Geodetic Benchmark Computer
+        </Text>
         <Text style={styles.pageDesc}>
-          Configure GNSS accuracy thresholds, optical viewfinder aids, manual coordinate locks, and waypoint offset calculations.
+          Configure GNSS accuracy thresholds, structural slope clinometer, solar & atmospheric telemetry, and waypoint offset calculations.
         </Text>
       </View>
 
       <View style={styles.twoColGrid}>
-        {/* Left Column: GNSS & Optical Thresholds */}
+        {/* Left Column: GNSS, Clinometer & Optical Thresholds */}
         <View style={styles.panel}>
           <Text style={styles.panelTitle}>GNSS & Optical Instrument Thresholds</Text>
 
@@ -341,6 +515,50 @@ export const CalibrationView: React.FC<CalibrationViewProps> = ({
               step={5}
               value={distanceThrottle}
               onChange={(e) => onChangeDistanceThrottle(Number(e.target.value))}
+              style={{ width: '100%' }}
+            />
+          </View>
+
+          <View style={styles.divider} />
+
+          <Text style={styles.panelTitle}>
+            Structural Pitch & Roll Clinometer (Slope Grade: {telemetry.clinometer.slopeGradePct}%)
+          </Text>
+
+          <View style={styles.sliderBlock}>
+            <View style={styles.sliderHeader}>
+              <Text style={styles.switchLabel}>Elevation Pitch Angle (°)</Text>
+              <Text style={styles.monoValue}>
+                {telemetry.clinometer.pitchDeg >= 0 ? '+' : ''}
+                {telemetry.clinometer.pitchDeg.toFixed(1)}° ({telemetry.clinometer.slopeGradePct}% Grade)
+              </Text>
+            </View>
+            <input
+              type="range"
+              min={-45}
+              max={45}
+              step={0.5}
+              value={telemetry.clinometer.pitchDeg}
+              onChange={(e) => handlePitchChange(Number(e.target.value))}
+              style={{ width: '100%' }}
+            />
+          </View>
+
+          <View style={styles.sliderBlock}>
+            <View style={styles.sliderHeader}>
+              <Text style={styles.switchLabel}>Horizon Roll Tilt (°)</Text>
+              <Text style={styles.monoValue}>
+                {telemetry.clinometer.rollDeg >= 0 ? '+' : ''}
+                {telemetry.clinometer.rollDeg.toFixed(1)}°
+              </Text>
+            </View>
+            <input
+              type="range"
+              min={-30}
+              max={30}
+              step={0.5}
+              value={telemetry.clinometer.rollDeg}
+              onChange={(e) => handleRollChange(Number(e.target.value))}
               style={{ width: '100%' }}
             />
           </View>
@@ -380,10 +598,6 @@ export const CalibrationView: React.FC<CalibrationViewProps> = ({
           <View style={styles.divider} />
 
           <Text style={styles.panelTitle}>Manual Benchmark Coordinate Lock</Text>
-          <Text style={styles.templateDesc}>
-            Lock coordinates to a fixed survey station when operating under dense canopy or inside tunnels.
-          </Text>
-
           <View style={styles.coordInputRow}>
             <View style={{ flex: 1, marginRight: 8 }}>
               <Text style={styles.fieldLabel}>Latitude (DD)</Text>
@@ -431,9 +645,9 @@ export const CalibrationView: React.FC<CalibrationViewProps> = ({
           </View>
         </View>
 
-        {/* Right Column: Geodetic Datum Matrix & Waypoint Distance Calculator */}
+        {/* Right Column: Geodetic Datum Matrix, Solar/Atmospheric Telemetry & Waypoint Calculator */}
         <View style={styles.panel}>
-          <Text style={styles.panelTitle}>Live Geodetic Datum Readout (WGS84)</Text>
+          <Text style={styles.panelTitle}>Live Geodetic & Atmospheric Telemetry (WGS84)</Text>
 
           <View style={styles.datumTable}>
             <View style={styles.datumRow}>
@@ -453,6 +667,20 @@ export const CalibrationView: React.FC<CalibrationViewProps> = ({
             <View style={styles.datumRow}>
               <Text style={styles.datumKey}>Open Location Plus Code</Text>
               <Text style={styles.datumVal}>{formatPlusCode(telemetry.lat, telemetry.lon)}</Text>
+            </View>
+            <View style={styles.datumRow}>
+              <Text style={styles.datumKey}>Solar Elevation & Azimuth</Text>
+              <Text style={[styles.datumVal, { color: '#F59E0B' }]}>
+                EL {telemetry.solar.elevationDeg}° · AZ {telemetry.solar.azimuthDeg}° (
+                {telemetry.solar.daylightStatus})
+              </Text>
+            </View>
+            <View style={styles.datumRow}>
+              <Text style={styles.datumKey}>Atmospheric & Barometer</Text>
+              <Text style={[styles.datumVal, { color: '#06B6D4' }]}>
+                {telemetry.weather.tempC}°C · RH {telemetry.weather.humidity}% ·{' '}
+                {telemetry.weather.pressureHpa} hPa · {telemetry.weather.windKmh} km/h
+              </Text>
             </View>
           </View>
 
@@ -618,7 +846,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 14,
+    marginBottom: 13,
   },
   switchLabel: {
     color: '#E2E8F0',
@@ -626,7 +854,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   fieldGroup: {
-    marginBottom: 16,
+    marginBottom: 15,
   },
   fieldLabel: {
     color: '#94A3B8',
@@ -635,7 +863,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   sliderBlock: {
-    marginBottom: 16,
+    marginBottom: 14,
   },
   sliderHeader: {
     flexDirection: 'row',
@@ -644,7 +872,7 @@ const styles = StyleSheet.create({
   },
   monoValue: {
     color: '#00E676',
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '700',
     fontFamily: 'JetBrains Mono, monospace',
   },
@@ -694,7 +922,7 @@ const styles = StyleSheet.create({
   },
   datumVal: {
     color: '#00E676',
-    fontSize: 12,
+    fontSize: 11.5,
     fontFamily: 'JetBrains Mono, monospace',
     fontWeight: '600',
   },

@@ -74,7 +74,6 @@ export const DataOverlay: React.FC<DataOverlayProps> = ({
   return (
     <View style={styles.overlayWrapper} pointerEvents="none">
       <View style={styles.card}>
-        {/* Header Bar */}
         <View style={styles.headerStrip}>
           <Text style={styles.headerTitle} numberOfLines={1}>
             {projectMeta.customHeader || 'GPS Map Camera Pro · Survey Telemetry'}
@@ -85,7 +84,6 @@ export const DataOverlay: React.FC<DataOverlayProps> = ({
         </View>
 
         <View style={styles.bodyRow}>
-          {/* Radar / Map Thumbnail Box */}
           {stampConfig.showMap && stampConfig.template === 'engineering' && (
             <View style={styles.radarBox}>
               <View style={styles.radarRingOuter}>
@@ -99,7 +97,6 @@ export const DataOverlay: React.FC<DataOverlayProps> = ({
             </View>
           )}
 
-          {/* Main Telemetry Column */}
           <View style={styles.telemetryCol}>
             <Text style={styles.addressPrimary} numberOfLines={1}>
               {telemetry.address}
@@ -129,6 +126,22 @@ export const DataOverlay: React.FC<DataOverlayProps> = ({
               </Text>
             )}
 
+            {(stampConfig.showWeather || stampConfig.showClinometerSolar) && (
+              <Text style={styles.monoAmber} numberOfLines={1}>
+                {stampConfig.showWeather
+                  ? `ENV ${telemetry.weather.tempC}°C · RH ${telemetry.weather.humidity}% · ${telemetry.weather.pressureHpa} hPa`
+                  : ''}
+                {stampConfig.showWeather && stampConfig.showClinometerSolar ? ' · ' : ''}
+                {stampConfig.showClinometerSolar
+                  ? `SLOPE ${telemetry.clinometer.slopeGradePct.toFixed(1)}% (P ${
+                      telemetry.clinometer.pitchDeg >= 0 ? '+' : ''
+                    }${telemetry.clinometer.pitchDeg.toFixed(1)}°) · SUN EL ${
+                      telemetry.solar.elevationDeg
+                    }°`
+                  : ''}
+              </Text>
+            )}
+
             {stampConfig.showProjectMeta && (
               <Text style={styles.projectMetaLine} numberOfLines={1}>
                 {projectMeta.projectId} · {projectMeta.category} · {projectMeta.surveyor}
@@ -136,6 +149,15 @@ export const DataOverlay: React.FC<DataOverlayProps> = ({
               </Text>
             )}
           </View>
+
+          {stampConfig.showQR && (
+            <View style={styles.qrPreviewBox}>
+              <span className="material-icons" style={{ fontSize: 28, color: '#F8FAFC' }}>
+                qr_code_2
+              </span>
+              <Text style={styles.qrLabel}>GEO-QR</Text>
+            </View>
+          )}
         </View>
       </View>
     </View>
@@ -145,7 +167,7 @@ export const DataOverlay: React.FC<DataOverlayProps> = ({
 const styles = StyleSheet.create({
   overlayWrapper: {
     position: 'absolute',
-    bottom: 108,
+    bottom: 104,
     left: 16,
     right: 16,
     alignItems: 'center',
@@ -153,7 +175,7 @@ const styles = StyleSheet.create({
   },
   minimalBar: {
     width: '100%',
-    maxWidth: 640,
+    maxWidth: 680,
     backgroundColor: 'rgba(7, 9, 14, 0.86)',
     borderWidth: 1,
     borderColor: '#1E293B',
@@ -166,7 +188,7 @@ const styles = StyleSheet.create({
   },
   card: {
     width: '100%',
-    maxWidth: 640,
+    maxWidth: 680,
     backgroundColor: 'rgba(7, 9, 14, 0.86)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.16)',
@@ -249,11 +271,11 @@ const styles = StyleSheet.create({
     color: '#F8FAFC',
     fontSize: 12.5,
     fontWeight: '700',
-    marginBottom: 3,
+    marginBottom: 2,
   },
   monoPrimary: {
     color: '#00E676',
-    fontSize: 11.5,
+    fontSize: 11,
     fontWeight: '600',
     fontFamily: 'JetBrains Mono, monospace',
     marginBottom: 2,
@@ -275,10 +297,33 @@ const styles = StyleSheet.create({
     fontFamily: 'JetBrains Mono, monospace',
     marginBottom: 2,
   },
+  monoAmber: {
+    color: '#F59E0B',
+    fontSize: 10.2,
+    fontFamily: 'JetBrains Mono, monospace',
+    marginBottom: 2,
+  },
   projectMetaLine: {
     color: '#94A3B8',
-    fontSize: 10.5,
+    fontSize: 10.2,
     fontWeight: '500',
     marginTop: 1,
+  },
+  qrPreviewBox: {
+    width: 54,
+    height: 66,
+    backgroundColor: '#0B0E17',
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    borderRadius: 6,
+    marginLeft: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qrLabel: {
+    color: '#94A3B8',
+    fontSize: 8,
+    fontFamily: 'JetBrains Mono, monospace',
+    marginTop: 3,
   },
 });

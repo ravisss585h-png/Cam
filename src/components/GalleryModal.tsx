@@ -1,11 +1,19 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, Image, ScrollView, StyleSheet } from 'react-native';
 import {
   exportPhotosToCSV,
   exportPhotosToGeoJSON,
+  exportPrintableInspectionDossier,
+  exportTeamSyncBundle,
+  importTeamSyncBundle,
   SavedPhoto,
 } from '../services/galleryDb';
-import { formatUTM, InspectionCategory } from '../services/locationService';
+import {
+  formatUTM,
+  InspectionCategory,
+  ReviewStatus,
+  SurveyProjectMeta,
+} from '../services/locationService';
 
 const CATEGORIES: Array<'All' | InspectionCategory> = [
   'All',
@@ -16,59 +24,118 @@ const CATEGORIES: Array<'All' | InspectionCategory> = [
   'Boundary Marker',
 ];
 
+const REVIEW_STATUSES: ReviewStatus[] = ['Pending Review', 'Approved', 'Flagged'];
+
 interface FieldLogViewProps {
   photos: SavedPhoto[];
+  projectMeta: SurveyProjectMeta;
   onDeletePhoto: (id: number) => void;
   onSharePhoto: (base64Data: string) => void;
+  onUpdateReviewStatus: (id: number, status: ReviewStatus, reviewer: string) => void;
+  onRefreshPhotos: () => void;
   onBackToCamera: () => void;
 }
 
 export const FieldLogView: React.FC<FieldLogViewProps> = ({
   photos,
+  projectMeta,
   onDeletePhoto,
   onSharePhoto,
+  onUpdateReviewStatus,
+  onRefreshPhotos,
   onBackToCamera,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<'All' | InspectionCategory>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedPhoto, setSelectedPhoto] = useState<SavedPhoto | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [reviewerName, setReviewerName] = useState<string>(projectMeta.surveyor || 'Project Manager');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const filteredPhotos = useMemo(() => {
     return photos.filter((p) => {
-      const catMatch = selectedCategory === 'All' || (p.category || 'Civil Survey') === selectedCategory;
+      const catMatch =
+        selectedCategory === 'All' || (p.category || 'Civil Survey') === selectedCategory;
       const q = searchQuery.trim().toLowerCase();
       if (!q) return catMatch;
-      const hay = `${p.projectId || ''} ${p.surveyor || ''} ${p.address || ''} ${p.notes || ''} ${p.utm || ''}`.toLowerCase();
+      const hay = `${p.projectId || ''} ${p.surveyor || ''} ${p.address || ''} ${p.notes || ''} ${
+        p.utm || ''
+      } ${p.reviewStatus || ''}`.toLowerCase();
       return catMatch && hay.includes(q);
     });
   }, [photos, selectedCategory, searchQuery]);
+
+  const handleImportBundleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      if (typeof reader.result === 'string') {
+        try {
+          await importTeamSyncBundle(reader.result);
+          onRefreshPhotos();
+        } catch (err) {
+          console.warn('Bundle import failed:', err);
+        }
+      }
+    };
+    reader.readAsText(file);
+  };
 
   return (
     <View style={styles.workspace}>
       {/* Top Toolbar */}
       <View style={styles.toolbar}>
         <View style={styles.toolbarTitleCol}>
-          <Text style={styles.sectionTitle}>01. Geotagged Field Inspection Log</Text>
+          <Text style={styles.sectionTitle}>
+            01. Geotagged Field Inspection Log & QA Dossier
+          </Text>
           <Text style={styles.sectionMeta}>
-            {filteredPhotos.length} of {photos.length} survey records · Stored locally in IndexedDB
+            {filteredPhotos.length} of {photos.length} survey records · Exportable to PDF/HTML Dossier, GeoJSON, CSV, or Team Sync Bundle
           </Text>
         </View>
 
         <View style={styles.toolbarActions}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={handleImportBundleFile}
+            style={{ display: 'none' }}
+          />
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={() => fileInputRef.current?.click()}
+          >
+            <Text style={styles.secondaryBtnText}>Import Sync JSON</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={() => exportTeamSyncBundle(filteredPhotos, projectMeta)}
+            disabled={filteredPhotos.length === 0}
+          >
+            <Text style={styles.secondaryBtnText}>Export Team Sync</Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={styles.secondaryBtn}
             onPress={() => exportPhotosToGeoJSON(filteredPhotos)}
             disabled={filteredPhotos.length === 0}
           >
-            <Text style={styles.secondaryBtnText}>Export GeoJSON</Text>
+            <Text style={styles.secondaryBtnText}>GeoJSON</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.primaryBtn}
+            style={styles.secondaryBtn}
             onPress={() => exportPhotosToCSV(filteredPhotos)}
             disabled={filteredPhotos.length === 0}
           >
-            <Text style={styles.primaryBtnText}>Download CSV</Text>
+            <Text style={styles.secondaryBtnText}>CSV</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.primaryBtn}
+            onPress={() => exportPrintableInspectionDossier(filteredPhotos, projectMeta)}
+            disabled={filteredPhotos.length === 0}
+          >
+            <Text style={styles.primaryBtnText}>Generate Inspection Dossier</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -92,11 +159,11 @@ export const FieldLogView: React.FC<FieldLogViewProps> = ({
 
         <input
           type="text"
-          placeholder="Search project ID, surveyor, UTM, or address..."
+          placeholder="Search project ID, surveyor, QA status, UTM, or address..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           style={{
-            minWidth: 260,
+            minWidth: 270,
             backgroundColor: '#0B0E17',
             border: '1px solid #1E293B',
             borderRadius: 8,
@@ -118,7 +185,7 @@ export const FieldLogView: React.FC<FieldLogViewProps> = ({
           </span>
           <Text style={styles.emptyTitle}>No Geotagged Field Reports Found</Text>
           <Text style={styles.emptyDesc}>
-            Capture a stamped survey photo from the optical viewfinder to populate your GIS field log.
+            Capture a stamped survey photo from the optical viewfinder or import a Team Sync JSON bundle to populate your GIS field log.
           </Text>
           <TouchableOpacity style={[styles.primaryBtn, { marginTop: 18 }]} onPress={onBackToCamera}>
             <Text style={styles.primaryBtnText}>Return to Viewfinder</Text>
@@ -130,6 +197,9 @@ export const FieldLogView: React.FC<FieldLogViewProps> = ({
             const lat = photo.lat ?? 0;
             const lon = photo.lon ?? 0;
             const utm = photo.utm || formatUTM(lat, lon);
+            const status = photo.reviewStatus || 'Pending Review';
+            const statusColor =
+              status === 'Approved' ? '#00E676' : status === 'Flagged' ? '#F43F5E' : '#F59E0B';
             const dateLabel = new Date(photo.timestamp).toLocaleString('en-GB', {
               day: '2-digit',
               month: 'short',
@@ -156,7 +226,7 @@ export const FieldLogView: React.FC<FieldLogViewProps> = ({
                 <View style={styles.cardBody}>
                   <Text style={styles.cardKicker} numberOfLines={1}>
                     {photo.projectId || 'PRJ-2026-01'} · {photo.category || 'Civil Survey'} ·{' '}
-                    {dateLabel}
+                    <Text style={{ color: statusColor, fontWeight: '700' }}>{status}</Text>
                   </Text>
                   <Text style={styles.cardTitle} numberOfLines={1}>
                     {photo.address || 'Field Survey Waypoint'}
@@ -165,7 +235,7 @@ export const FieldLogView: React.FC<FieldLogViewProps> = ({
                     {lat.toFixed(6)}, {lon.toFixed(6)} · {utm}
                   </Text>
                   <Text style={styles.cardMeta} numberOfLines={1}>
-                    ALT {photo.altitude || '0.0m'} · ACC ±{Math.round(photo.accuracy ?? 12)}m ·{' '}
+                    {dateLabel} · ALT {photo.altitude || '0.0m'} ·{' '}
                     {photo.surveyor || 'Field Engineer'}
                   </Text>
                 </View>
@@ -175,7 +245,7 @@ export const FieldLogView: React.FC<FieldLogViewProps> = ({
         </ScrollView>
       )}
 
-      {/* Fullscreen Record Inspector Modal */}
+      {/* Fullscreen Record Inspector & Project Manager QA Modal */}
       {selectedPhoto ? (
         <View style={styles.viewerOverlay}>
           <View style={styles.viewerContainer}>
@@ -183,11 +253,13 @@ export const FieldLogView: React.FC<FieldLogViewProps> = ({
               <View>
                 <Text style={styles.viewerTitle}>
                   {selectedPhoto.projectId || 'PRJ-2026-01'} ·{' '}
-                  {selectedPhoto.category || 'Civil Survey'}
+                  {selectedPhoto.category || 'Civil Survey'} ·{' '}
+                  {selectedPhoto.reviewStatus || 'Pending Review'}
                 </Text>
                 <Text style={styles.viewerMeta}>
                   {new Date(selectedPhoto.timestamp).toLocaleString()} · Surveyor:{' '}
-                  {selectedPhoto.surveyor || 'Field Engineer'}
+                  {selectedPhoto.surveyor || 'Field Engineer'}{' '}
+                  {selectedPhoto.reviewer ? `· QA Sign-off: ${selectedPhoto.reviewer}` : ''}
                 </Text>
               </View>
               <TouchableOpacity
@@ -209,14 +281,57 @@ export const FieldLogView: React.FC<FieldLogViewProps> = ({
               resizeMode="contain"
             />
 
+            {/* QA Sign-Off Bar */}
+            {selectedPhoto.id !== undefined && (
+              <View style={styles.qaBar}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={styles.qaLabel}>QA Review Status:</Text>
+                  {REVIEW_STATUSES.map((st) => {
+                    const active = (selectedPhoto.reviewStatus || 'Pending Review') === st;
+                    return (
+                      <TouchableOpacity
+                        key={st}
+                        style={[styles.qaBtn, active && styles.qaBtnActive]}
+                        onPress={() => {
+                          onUpdateReviewStatus(selectedPhoto.id!, st, reviewerName);
+                          setSelectedPhoto({
+                            ...selectedPhoto,
+                            reviewStatus: st,
+                            reviewer: reviewerName,
+                          });
+                        }}
+                      >
+                        <Text style={[styles.qaBtnText, active && styles.qaBtnTextActive]}>
+                          {st}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={styles.qaLabel}>Reviewer:</Text>
+                  <input
+                    type="text"
+                    value={reviewerName}
+                    onChange={(e) => setReviewerName(e.target.value)}
+                    placeholder="QA Reviewer Name"
+                    style={{ width: 160, padding: '5px 8px', fontSize: 12 }}
+                  />
+                </View>
+              </View>
+            )}
+
             <View style={styles.viewerFooter}>
               <View style={styles.viewerCoordsCol}>
                 <Text style={styles.cardMono}>
                   DD: {(selectedPhoto.lat ?? 0).toFixed(6)}, {(selectedPhoto.lon ?? 0).toFixed(6)} ·
-                  UTM: {selectedPhoto.utm || formatUTM(selectedPhoto.lat ?? 0, selectedPhoto.lon ?? 0)}
+                  UTM:{' '}
+                  {selectedPhoto.utm || formatUTM(selectedPhoto.lat ?? 0, selectedPhoto.lon ?? 0)}
                 </Text>
                 <Text style={styles.viewerMeta} numberOfLines={1}>
                   {selectedPhoto.address || 'Field Waypoint'}{' '}
+                  {selectedPhoto.weatherSummary ? `· ${selectedPhoto.weatherSummary}` : ''}{' '}
                   {selectedPhoto.notes ? `· Note: ${selectedPhoto.notes}` : ''}
                 </Text>
               </View>
@@ -226,7 +341,7 @@ export const FieldLogView: React.FC<FieldLogViewProps> = ({
                   style={styles.primaryBtn}
                   onPress={() => onSharePhoto(selectedPhoto.data)}
                 >
-                  <Text style={styles.primaryBtnText}>Share / Download</Text>
+                  <Text style={styles.primaryBtnText}>Share / Download JPEG</Text>
                 </TouchableOpacity>
 
                 {selectedPhoto.id !== undefined && (
@@ -317,9 +432,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#1E293B',
     marginBottom: 18,
+    gap: 10,
   },
   toolbarTitleCol: {
-    marginBottom: 6,
+    marginBottom: 4,
   },
   sectionTitle: {
     color: '#F8FAFC',
@@ -333,18 +449,19 @@ const styles = StyleSheet.create({
   },
   toolbarActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
+    gap: 8,
   },
   primaryBtn: {
     backgroundColor: '#00E676',
     paddingVertical: 9,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     borderRadius: 8,
-    marginLeft: 10,
   },
   primaryBtnText: {
     color: '#07090E',
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '700',
   },
   secondaryBtn: {
@@ -352,12 +469,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#1E293B',
     paddingVertical: 9,
-    paddingHorizontal: 16,
+    paddingHorizontal: 13,
     borderRadius: 8,
   },
   secondaryBtnText: {
     color: '#F8FAFC',
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '600',
   },
   filterBar: {
@@ -409,7 +526,7 @@ const styles = StyleSheet.create({
     color: '#94A3B8',
     fontSize: 13,
     textAlign: 'center',
-    maxWidth: 420,
+    maxWidth: 440,
     lineHeight: 20,
   },
   scrollArea: {
@@ -475,8 +592,8 @@ const styles = StyleSheet.create({
   },
   viewerContainer: {
     width: '100%',
-    maxWidth: 920,
-    height: '90%',
+    maxWidth: 940,
+    height: '92%',
     backgroundColor: '#111827',
     borderWidth: 1,
     borderColor: '#1E293B',
@@ -488,7 +605,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingBottom: 14,
+    paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#1E293B',
   },
@@ -514,8 +631,46 @@ const styles = StyleSheet.create({
     flex: 1,
     width: '100%',
     backgroundColor: '#07090E',
-    marginVertical: 14,
+    marginVertical: 12,
     borderRadius: 8,
+  },
+  qaBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    backgroundColor: '#0B0E17',
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 12,
+    gap: 10,
+  },
+  qaLabel: {
+    color: '#94A3B8',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  qaBtn: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1E293B',
+  },
+  qaBtnActive: {
+    borderColor: '#00E676',
+    backgroundColor: 'rgba(0, 230, 118, 0.12)',
+  },
+  qaBtnText: {
+    color: '#94A3B8',
+    fontSize: 11.5,
+    fontWeight: '600',
+  },
+  qaBtnTextActive: {
+    color: '#00E676',
   },
   viewerFooter: {
     flexDirection: 'row',
@@ -534,17 +689,17 @@ const styles = StyleSheet.create({
   viewerActions: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
   },
   deleteBtn: {
     backgroundColor: '#F43F5E',
     paddingVertical: 9,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     borderRadius: 8,
-    marginLeft: 10,
   },
   deleteBtnText: {
     color: '#FFFFFF',
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '700',
   },
   policyModalBox: {

@@ -1,9 +1,10 @@
-name: Build Android Signed Release APK
+name: Build Android Debug & Signed Release APK/AAB
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,108 +14,138 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '17'
+          java-version: '21'
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install Dependencies
         run: |
           npm install --legacy-peer-deps
-          npm install @capacitor/assets --save-dev --legacy-peer-deps
 
-      - name: Prepare Files
+      - name: Build Web Bundle into www/
         run: |
           if [ -f "capacitor.Config.json" ]; then
             mv capacitor.Config.json capacitor.config.json
           fi
           npm run build
+          test -f www/index.html
 
-      - name: Add Android & Generate Files
+      - name: Add Android Platform & Sync Capacitor
         run: |
+          rm -rf android
           npx cap add android
           npx cap sync android
 
-      - name: Generate App Icon
-        run: npx capacitor-assets generate --android || echo "Skipping icon"
+      - name: Generate App Icons & Splash Assets
+        run: |
+          npx capacitor-assets generate --android || echo "Skipping icon generation"
 
-      - name: Inject Permissions & AdMob (Complete Fix)
+      - name: Inject Android Permissions & AdMob App ID
         run: |
           MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
-          
-          # 1. Inject all necessary permissions for GPS Camera Pro
-          sed -i '/<application/i \
-          <uses-permission android:name="android.permission.INTERNET" /> \
-          <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /> \
-          <uses-permission android:name="android.permission.CAMERA" /> \
-          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" /> \
-          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" /> \
-          <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" /> \
-          <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" /> \
-          <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" /> \
-          <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" /> \
-          <uses-feature android:name="android.hardware.camera" android:required="true" /> \
-          <uses-feature android:name="android.hardware.location.gps" />' $MANIFEST_PATH
-          
-          # 2. Fix Storage Permission (Legacy Support)
-          sed -i 's|<application|<application android:requestLegacyExternalStorage="true"|' $MANIFEST_PATH
-          
-          # 3. Inject AdMob Application ID
-          sed -i 's|</application>| <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-7807602925578307~7450691474"/> \n</application>|' $MANIFEST_PATH
 
-      - name: Enforce Android API 35 (Strict)
+          # 1. Inject permissions before <application
+          sed -i '/<application/i \
+          <uses-permission android:name="android.permission.INTERNET" />\n\
+          <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n\
+          <uses-permission android:name="android.permission.CAMERA" />\n\
+          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n\
+          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n\
+          <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />\n\
+          <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n\
+          <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\n\
+          <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n\
+          <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />\n\
+          <uses-feature android:name="android.hardware.camera" android:required="false" />\n\
+          <uses-feature android:name="android.hardware.location.gps" android:required="false" />' "$MANIFEST_PATH"
+
+          # 2. Enable requestLegacyExternalStorage
+          sed -i 's|<application|<application android:requestLegacyExternalStorage="true"|' "$MANIFEST_PATH"
+
+          # 3. Inject AdMob APPLICATION_ID meta-data
+          sed -i 's|</application>|    <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-7807602925578307~7450691474"/>\n    </application>|' "$MANIFEST_PATH"
+
+      - name: Configure Android SDK 35 & Auto-Increment Version Code
         run: |
-          echo "Forcing Target and Compile SDK to 35..."
           if [ -f "android/variables.gradle" ]; then
             sed -i 's/compileSdkVersion = [0-9]\+/compileSdkVersion = 35/' android/variables.gradle
             sed -i 's/targetSdkVersion = [0-9]\+/targetSdkVersion = 35/' android/variables.gradle
           fi
-          sed -i 's/compileSdk [0-9]\+/compileSdk 35/' android/app/build.gradle
-          sed -i 's/targetSdk [0-9]\+/targetSdk 35/' android/app/build.gradle
-          echo "Strictly enforced API 35."
-
-      - name: Decode Keystore
-        run: |
-          echo "${{ secrets.SIGNING_KEY_STORE_BASE64 }}" | base64 -d > android/app/release.jks
-
-      - name: Auto-Increment Version Code
-        run: |
+          sed -i 's/compileSdk [0-9]\+/compileSdk 35/' android/app/build.gradle || true
+          sed -i 's/targetSdk [0-9]\+/targetSdk 35/' android/app/build.gradle || true
           sed -i 's/versionCode [0-9]\+/versionCode ${{ github.run_number }}/' android/app/build.gradle
-          echo "Updated Version Code to ${{ github.run_number }}"
+          echo "Configured SDK 35 and versionCode ${{ github.run_number }}."
 
-      - name: Inject Firebase SDK & Config
+      - name: Inject Firebase SDK & Config (If Secret Provided)
+        env:
+          FB_B64: ${{ secrets.FIREBASE_CONFIG_BASE64 }}
         run: |
-          # 1. Decode google-services.json to correct location
-          echo "${{ secrets.FIREBASE_CONFIG_BASE64 }}" | base64 -d > android/app/google-services.json
-          
-          # 2. Add Firebase Classpath to Project build.gradle
-          sed -i '/dependencies {/a \        classpath "com.google.gms:google-services:4.4.0"' android/build.gradle
-          
-          # 3. Apply Plugin to App build.gradle
-          sed -i '1i apply plugin: "com.google.gms.google-services"' android/app/build.gradle
-          
-          # 4. Add Firebase Dependencies
-          sed -i '/dependencies {/a \    implementation platform("com.google.firebase:firebase-bom:33.1.2")\n    implementation "com.google.firebase:firebase-analytics"' android/app/build.gradle
-          echo "Firebase successfully injected."
+          if [ -n "$FB_B64" ]; then
+            echo "$FB_B64" | base64 -d > android/app/google-services.json
+            if [ -s "android/app/google-services.json" ]; then
+              sed -i '/dependencies {/a \        classpath "com.google.gms:google-services:4.4.2"' android/build.gradle
+              sed -i '/dependencies {/a \    implementation platform("com.google.firebase:firebase-bom:33.1.2")\n    implementation "com.google.firebase:firebase-analytics"' android/app/build.gradle
+              echo 'apply plugin: "com.google.gms.google-services"' >> android/app/build.gradle
+              echo "Firebase google-services plugin applied at end of app/build.gradle."
+            else
+              rm -f android/app/google-services.json
+              echo "Decoded FIREBASE_CONFIG_BASE64 was empty — skipping Firebase plugin."
+            fi
+          else
+            echo "No FIREBASE_CONFIG_BASE64 secret set — skipping Firebase injection."
+          fi
 
-      - name: Build & Sign Release Bundle
+      - name: Build Debug APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew bundleRelease \
-            -Pandroid.injected.signing.store.file=$(pwd)/app/release.jks \
-            -Pandroid.injected.signing.store.password=${{ secrets.SIGNING_STORE_PASSWORD }} \
-            -Pandroid.injected.signing.key.alias=${{ secrets.SIGNING_KEY_ALIAS }} \
-            -Pandroid.injected.signing.key.password=${{ secrets.SIGNING_KEY_PASSWORD }}
+          ./gradlew assembleDebug
 
-      - name: Upload Signed Bundle
+      - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GPS-Map-Camera-Pro-Bundle
+          name: GPS-Map-Camera-Pro-Debug-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Build & Sign Release Bundle and APK (If Signing Secrets Provided)
+        env:
+          KEYSTORE_B64: ${{ secrets.SIGNING_KEY_STORE_BASE64 }}
+          STORE_PASS: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > android/app/release.jks
+            cd android
+            chmod +x gradlew
+            ./gradlew bundleRelease assembleRelease \
+              -Pandroid.injected.signing.store.file=$(pwd)/app/release.jks \
+              -Pandroid.injected.signing.store.password="$STORE_PASS" \
+              -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+              -Pandroid.injected.signing.key.password="$KEY_PASS"
+          else
+            echo "Signing secrets not configured — skipping signed release build (Debug APK already built)."
+          fi
+
+      - name: Upload Signed Release Bundle (AAB)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPS-Map-Camera-Pro-Release-Bundle
           path: android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: ignore
+
+      - name: Upload Signed Release APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPS-Map-Camera-Pro-Release-APK
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: ignore
