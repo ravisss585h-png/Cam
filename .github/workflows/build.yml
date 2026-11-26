@@ -72,16 +72,16 @@ jobs:
           # 3. Inject AdMob APPLICATION_ID meta-data
           sed -i 's|</application>|    <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-7807602925578307~7450691474"/>\n    </application>|' "$MANIFEST_PATH"
 
-      - name: Configure Android SDK 35 & Auto-Increment Version Code
+      - name: Configure Android SDK 36 & Auto-Increment Version Code
         run: |
           if [ -f "android/variables.gradle" ]; then
-            sed -i 's/compileSdkVersion = [0-9]\+/compileSdkVersion = 35/' android/variables.gradle
-            sed -i 's/targetSdkVersion = [0-9]\+/targetSdkVersion = 35/' android/variables.gradle
+            sed -i 's/compileSdkVersion = [0-9]\+/compileSdkVersion = 36/' android/variables.gradle
+            sed -i 's/targetSdkVersion = [0-9]\+/targetSdkVersion = 36/' android/variables.gradle
           fi
-          sed -i 's/compileSdk [0-9]\+/compileSdk 35/' android/app/build.gradle || true
-          sed -i 's/targetSdk [0-9]\+/targetSdk 35/' android/app/build.gradle || true
+          sed -i 's/compileSdk [0-9]\+/compileSdk 36/' android/app/build.gradle || true
+          sed -i 's/targetSdk [0-9]\+/targetSdk 36/' android/app/build.gradle || true
           sed -i 's/versionCode [0-9]\+/versionCode ${{ github.run_number }}/' android/app/build.gradle
-          echo "Configured SDK 35 and versionCode ${{ github.run_number }}."
+          echo "Configured SDK 36 and versionCode ${{ github.run_number }}."
 
       - name: Inject Firebase SDK & Config (If Secret Provided)
         env:
